@@ -4,6 +4,10 @@ PWA para capturar tickets/recibos desde el móvil y registrarlos automáticament
 (`hr.expense`) en Odoo (Antrade Servitech SL). Ver [CLAUDE.md](./CLAUDE.md) para el contexto
 técnico completo, decisiones de datos en Odoo y limitaciones conocidas.
 
+**Producción (cuenta de Jesús)**: https://antrade-expensesnap.vercel.app
+Proyecto Vercel: `antrade/antrade-expensesnap` (team `antrade`). Repo GitHub: pendiente de que
+Jesús haga el push inicial a `AntradeServitech/expense-snap-antrade` (ver instrucciones más abajo).
+
 ## Deploy en Vercel
 
 1. **Clonar/subir el repositorio.** Este proyecto (`ExpenseSnap/`) debe subirse a un repo de
