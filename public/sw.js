@@ -27,7 +27,7 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Las llamadas a /api/* nunca se cachean: necesitan red real (Odoo / Claude).
+  // Las llamadas a /api/* nunca se cachean: necesitan red real (Odoo / análisis del ticket).
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(request).catch(() =>

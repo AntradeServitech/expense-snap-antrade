@@ -22,15 +22,21 @@ const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const MAX_BASE64_CHARS = 6_000_000; // ~4.5MB binario, margen para el límite de body de Vercel
 
 const CATEGORY_KEYWORDS = {
-  restaurant: ['restaurante', 'restaurant', 'cafe', 'café', 'bar', 'menu', 'menú', 'comida'],
-  hotel: ['hotel', 'hostal', 'alojamiento', 'booking', 'check-in', 'check-out'],
-  transport: ['taxi', 'uber', 'cabify', 'metro', 'bus', 'tren', 'parking', 'aparcamiento', 'peaje'],
+  restaurant: ['restaurante', 'restaurant', 'cafe', 'café', 'bar', 'menu', 'menú', 'comida', 'pizza'],
+  hotel: ['hotel', 'hostal', 'alojamiento', 'booking', 'check-in', 'check-out', 'inn', 'marriott'],
+  transport: ['taxi', 'uber', 'cabify', 'metro', 'bus', 'tren', 'parking', 'aparcamiento', 'peaje', 'renfe', 'iberia', 'ryanair'],
   fuel: ['gasolina', 'gasoil', 'diesel', 'combustible', 'repsol', 'cepsa', 'bp', 'shell'],
-  office: ['oficina', 'papeleria', 'papelería', 'material', 'office'],
+  // Supermercados: sin categoría dedicada en Odoo todavía, se mapean a "office" (ver CLAUDE.md).
+  office: ['oficina', 'papeleria', 'papelería', 'material', 'office', 'mercadona', 'carrefour', 'lidl', 'aldi', 'supermercado', 'market', 'super'],
 };
 
 const CURRENCY_SYMBOLS = { '€': 'EUR', '$': 'USD', '£': 'GBP' };
 const KNOWN_CURRENCY_CODES = ['EUR', 'USD', 'GBP', 'CHF', 'MXN', 'JPY', 'BRL', 'ARS'];
+
+// Orden de prioridad para localizar el importe total en el texto OCR.
+const TOTAL_KEYWORDS = ['total'];
+const SECONDARY_AMOUNT_KEYWORDS = ['importe', 'a pagar', 'suma', 'amount', 'montant', 'gesamt', 'totale'];
+const MONEY_RE = /\d{1,6}[.,]\d{2}/;
 
 function extractJson(text) {
   const cleaned = text
@@ -102,27 +108,54 @@ async function structureWithClaude(ocrText, apiKey) {
   return extractJson(text);
 }
 
-function parseAmountAndCurrency(text) {
-  let currency = null;
+function parseCurrency(text) {
   for (const [symbol, code] of Object.entries(CURRENCY_SYMBOLS)) {
-    if (text.includes(symbol)) {
-      currency = code;
-      break;
+    if (text.includes(symbol)) return code;
+  }
+  const codeMatch = text.match(new RegExp(`\\b(${KNOWN_CURRENCY_CODES.join('|')})\\b`));
+  return codeMatch ? codeMatch[1] : null;
+}
+
+// Busca, en las líneas que contienen alguna de `keywords`, un importe en la misma línea
+// o en la línea inmediatamente siguiente. Tickets reales suelen repetir la palabra "total"
+// en líneas sin importe útil (p.ej. "TOTAL (8 ARTÍCULOS)" antes del "TOTAL: 23,56€" real),
+// así que: 1) se prioriza siempre un importe en la MISMA línea que la palabra clave (más
+// fiable que mirar la línea siguiente), y 2) si hay varias coincidencias se usa la ÚLTIMA,
+// porque el total real suele aparecer al final, después de los importes por artículo.
+function findAmountNearKeywords(lines, keywords) {
+  let sameLineCandidate = null;
+  let nextLineCandidate = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const lower = lines[i].toLowerCase();
+    if (!keywords.some((kw) => lower.includes(kw))) continue;
+
+    const sameLineMatch = lines[i].match(MONEY_RE);
+    if (sameLineMatch) {
+      sameLineCandidate = sameLineMatch[0];
+      continue;
     }
-  }
-  if (!currency) {
-    const codeMatch = text.match(new RegExp(`\\b(${KNOWN_CURRENCY_CODES.join('|')})\\b`));
-    if (codeMatch) currency = codeMatch[1];
+
+    const nextLine = lines[i + 1];
+    const nextLineMatch = nextLine && nextLine.match(MONEY_RE);
+    if (nextLineMatch) nextLineCandidate = nextLineMatch[0];
   }
 
-  // Busca un importe junto a palabras clave de total en varios idiomas.
-  const totalLineRegex = /(total|importe|amount|suma|gesamt)[^\d]{0,15}(\d{1,6}([.,]\d{2})?)/i;
-  const totalMatch = text.match(totalLineRegex);
-  let amountStr = totalMatch ? totalMatch[2] : null;
+  return sameLineCandidate || nextLineCandidate;
+}
 
+function parseAmount(text) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  // a) líneas con "total"
+  let amountStr = findAmountNearKeywords(lines, TOTAL_KEYWORDS);
+
+  // b) líneas con importe/a pagar/suma/amount/montant/gesamt/totale
+  if (!amountStr) amountStr = findAmountNearKeywords(lines, SECONDARY_AMOUNT_KEYWORDS);
+
+  // c) último recurso: el número con decimales más grande de todo el texto
   if (!amountStr) {
-    // Respaldo: el número con decimales más grande del texto.
-    const numbers = [...text.matchAll(/\d{1,6}[.,]\d{2}/g)].map((m) => m[0]);
+    const numbers = [...text.matchAll(new RegExp(MONEY_RE, 'g'))].map((m) => m[0]);
     if (numbers.length) {
       amountStr = numbers.reduce((max, cur) => {
         const toFloat = (s) => parseFloat(s.replace(',', '.'));
@@ -131,8 +164,7 @@ function parseAmountAndCurrency(text) {
     }
   }
 
-  const amount = amountStr ? parseFloat(amountStr.replace(',', '.')) : null;
-  return { amount, currency };
+  return amountStr ? parseFloat(amountStr.replace(',', '.')) : null;
 }
 
 function parseDate(text) {
@@ -148,20 +180,27 @@ function parseDate(text) {
   return null;
 }
 
-function guessCategory(text) {
-  const lower = text.toLowerCase();
+function categoryFromKeywords(value) {
+  const lower = value.toLowerCase();
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
     if (keywords.some((kw) => lower.includes(kw))) return category;
   }
-  return 'other';
+  return null;
+}
+
+// Prioriza el nombre del establecimiento (más fiable, p.ej. "MERCADONA" → office) y solo
+// si no encuentra nada ahí cae al texto completo del ticket.
+function guessCategory(merchant, fullText) {
+  return categoryFromKeywords(merchant || '') || categoryFromKeywords(fullText) || 'other';
 }
 
 function structureWithHeuristics(ocrText) {
   const lines = ocrText.split('\n').map((l) => l.trim()).filter(Boolean);
   const merchant = lines[0] || null;
-  const { amount, currency } = parseAmountAndCurrency(ocrText);
+  const amount = parseAmount(ocrText);
+  const currency = parseCurrency(ocrText);
   const date = parseDate(ocrText);
-  const category = guessCategory(ocrText);
+  const category = guessCategory(merchant, ocrText);
 
   return {
     merchant,
@@ -169,7 +208,7 @@ function structureWithHeuristics(ocrText) {
     currency: currency || 'EUR',
     date,
     category,
-    description: merchant ? `${merchant} (extraído sin Claude)` : 'Gasto (extraído sin Claude)',
+    description: merchant || 'Gasto (extracción automática)',
     confidence: 'low',
   };
 }
@@ -182,7 +221,8 @@ module.exports = async (req, res) => {
 
   const googleApiKey = process.env.GOOGLE_VISION_API_KEY;
   if (!googleApiKey) {
-    return res.status(500).json({ error: 'GOOGLE_VISION_API_KEY no configurada en el servidor' });
+    console.error('GOOGLE_VISION_API_KEY no configurada en el servidor');
+    return res.status(500).json({ error: 'El análisis de tickets no está disponible ahora mismo. Inténtalo más tarde.' });
   }
 
   const { image, mimeType } = req.body || {};
@@ -201,11 +241,11 @@ module.exports = async (req, res) => {
     ocrText = await ocrWithGoogleVision(image, googleApiKey);
   } catch (err) {
     console.error('Error Google Vision:', err.message);
-    return res.status(502).json({ error: 'Error al analizar la imagen con Google Vision', detail: err.message });
+    return res.status(502).json({ error: 'No se pudo analizar la imagen. Inténtalo de nuevo.', detail: err.message });
   }
 
   if (!ocrText.trim()) {
-    return res.status(502).json({ error: 'Google Vision no detectó texto en la imagen' });
+    return res.status(502).json({ error: 'No se detectó texto en la imagen. Prueba con otra foto, con mejor luz o más enfocada.' });
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;

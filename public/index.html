@@ -38,9 +38,22 @@
         </div>
 
         <button id="btnTakePhoto" class="btn btn-primary btn-huge">
-          <span class="btn-icon-circle">📷</span> Tomar foto
+          <span class="btn-icon-circle">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+          </span>
+          Tomar foto
         </button>
-        <button id="btnUploadImage" class="btn btn-secondary">🖼 Subir imagen</button>
+        <button id="btnUploadImage" class="btn btn-secondary">
+          <svg class="btn-icon-inline" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="M21 15l-5-5L5 21"/>
+          </svg>
+          Subir imagen
+        </button>
         <input type="file" id="inputCamera" accept="image/*" capture="environment" />
         <input type="file" id="inputGallery" accept="image/*" />
 
@@ -69,7 +82,7 @@
 
       <div id="confidenceBadge" class="confidence-badge">Confianza: —</div>
       <p id="confidenceWarning" class="confidence-low-warning hidden">
-        ⚠ Claude no está seguro de estos datos. Revísalos cuidadosamente antes de confirmar.
+        ⚠ Datos extraídos automáticamente. Revísalos cuidadosamente antes de confirmar.
       </p>
 
       <div class="card">
