@@ -91,8 +91,8 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const pdfBytes = await buildFicha(order_id);
-    const attName  = await uploadToOdoo(order_id, pdfBytes);
+    const { pdfBytes, opportunityId } = await buildFicha(order_id);
+    const attName = await uploadToOdoo(order_id, pdfBytes, opportunityId);
     return res.status(200).json({ success: true, attachment: attName });
   } catch (err) {
     console.error('[generate-ficha] ERROR:', err.message);
@@ -108,10 +108,12 @@ async function buildFicha(orderId) {
   const orders = await odoo.searchRead(
     'sale.order',
     [['id', '=', orderId]],
-    ['id', 'name', 'date_order', 'partner_id'],
+    ['id', 'name', 'date_order', 'partner_id', 'opportunity_id'],
   );
   if (!orders.length) throw new Error(`sale.order id=${orderId} no encontrado`);
   const order = orders[0];
+  // opportunity_id devuelto por Odoo como [id, 'name'] o false
+  const opportunityId = Array.isArray(order.opportunity_id) ? order.opportunity_id[0] : null;
 
   // 2. Idioma del cliente
   const partners = await odoo.searchRead(
@@ -230,7 +232,7 @@ async function buildFicha(orderId) {
     }
   }
 
-  return await pdfDoc.save();
+  return { pdfBytes: await pdfDoc.save(), opportunityId };
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +347,7 @@ function addSpecsPage(doc, bold, reg, tmpl, L) {
     color: GRAY,
   });
 
-  const descRaw = (tmpl.description_sale || '').trim();
+  const descRaw = htmlToText(tmpl.description_sale);
   let y = A4_H - 120;
 
   if (!descRaw) {
@@ -405,10 +407,30 @@ function safeText(str) {
   return (str || '').replace(/[^\x00-\xFF]/g, '?');
 }
 
+/** Convierte HTML de Odoo (description_sale) a texto plano con saltos de linea */
+function htmlToText(html) {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li>/gi, '  ')
+    .replace(/<\/?(ul|ol|div|h[1-6])[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#\d+;/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // ---------------------------------------------------------------------------
-// uploadToOdoo — sube el PDF como ir.attachment en el sale.order
+// uploadToOdoo — sube el PDF como ir.attachment en el sale.order y,
+// si existe, tambien en el crm.lead vinculado (opportunity_id).
 // ---------------------------------------------------------------------------
-async function uploadToOdoo(orderId, pdfBytes) {
+async function uploadToOdoo(orderId, pdfBytes, opportunityId) {
   // Leer nombre del pedido para el nombre del adjunto
   const orders = await odoo.searchRead(
     'sale.order',
@@ -418,9 +440,11 @@ async function uploadToOdoo(orderId, pdfBytes) {
   );
   const orderName = orders.length ? orders[0].name : `order-${orderId}`;
   const attName   = `Ficha_Tecnica_${orderName}.pdf`;
+  const b64 = Buffer.from(pdfBytes).toString('base64');
 
+  // --- Adjunto en sale.order ---
   // Borrar adjunto previo del mismo nombre si existe (idempotente)
-  const existing = await odoo.searchRead(
+  const existingSO = await odoo.searchRead(
     'ir.attachment',
     [
       ['res_model', '=', 'sale.order'],
@@ -429,20 +453,47 @@ async function uploadToOdoo(orderId, pdfBytes) {
     ],
     ['id'],
   );
-  if (existing.length) {
-    await odoo.execute('ir.attachment', 'unlink', [existing.map(a => a.id)]);
+  if (existingSO.length) {
+    await odoo.execute('ir.attachment', 'unlink', [existingSO.map(a => a.id)]);
   }
-
-  // Crear adjunto
-  const b64 = Buffer.from(pdfBytes).toString('base64');
   await odoo.create('ir.attachment', {
-    name:     attName,
-    type:     'binary',
-    raw:      b64,
+    name:      attName,
+    type:      'binary',
+    raw:       b64,
     res_model: 'sale.order',
-    res_id:   orderId,
-    mimetype: 'application/pdf',
+    res_id:    orderId,
+    mimetype:  'application/pdf',
   });
+
+  // --- Adjunto en crm.lead (si existe opportunity_id) ---
+  if (opportunityId && opportunityId > 0) {
+    try {
+      const existingCRM = await odoo.searchRead(
+        'ir.attachment',
+        [
+          ['res_model', '=', 'crm.lead'],
+          ['res_id', '=', opportunityId],
+          ['name', '=', attName],
+        ],
+        ['id'],
+      );
+      if (existingCRM.length) {
+        await odoo.execute('ir.attachment', 'unlink', [existingCRM.map(a => a.id)]);
+      }
+      await odoo.create('ir.attachment', {
+        name:      attName,
+        type:      'binary',
+        raw:       b64,
+        res_model: 'crm.lead',
+        res_id:    opportunityId,
+        mimetype:  'application/pdf',
+      });
+      console.log(`[generate-ficha] Adjunto subido tambien a crm.lead id=${opportunityId}`);
+    } catch (crmErr) {
+      // Fallo no fatal: el adjunto en sale.order ya existe
+      console.warn(`[generate-ficha] No se pudo subir adjunto a crm.lead id=${opportunityId}: ${crmErr.message}`);
+    }
+  }
 
   return attName;
 }
