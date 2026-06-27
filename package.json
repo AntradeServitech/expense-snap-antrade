@@ -4,7 +4,8 @@
   "private": true,
   "description": "PWA para capturar tickets/recibos y cargarlos como gastos (hr.expense) en Odoo - Antrade Servitech SL",
   "scripts": {
-    "dev": "vercel dev"
+    "dev": "vercel dev",
+    "build": "echo build ok"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
