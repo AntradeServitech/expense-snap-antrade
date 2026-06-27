@@ -76,12 +76,18 @@ module.exports = async (req, res) => {
   }
 
   // --- Autenticacion por secret ---
-  const { order_id, secret } = req.body || {};
+  // Acepta dos formatos:
+  //   Llamada directa:   POST body { order_id, secret }
+  //   Webhook de Odoo:   POST body { id, name, ... } + query ?secret=xxx
+  const body = req.body || {};
+  const order_id = body.order_id || body.id;
+  const secret = body.secret || (req.query && req.query.secret);
+
   if (!process.env.FICHA_SECRET || secret !== process.env.FICHA_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!order_id) {
-    return res.status(400).json({ error: 'order_id is required' });
+    return res.status(400).json({ error: 'order_id or id is required' });
   }
 
   try {
