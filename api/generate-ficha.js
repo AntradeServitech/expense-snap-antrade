@@ -224,7 +224,7 @@ async function buildFicha(orderId) {
       try {
         const pdfBytes = Buffer.from(att.raw, 'base64');
         const src = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-        const pages = await pdfDoc.copyPagesFrom(src, [...Array(src.getPageCount()).keys()]);
+        const pages = await pdfDoc.copyPages(src, src.getPageIndices());
         for (const p of pages) pdfDoc.addPage(p);
       } catch (e) {
         console.warn(`[generate-ficha] No se pudo incrustar adjunto ${att.name}: ${e.message}`);
