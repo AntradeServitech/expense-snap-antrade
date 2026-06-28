@@ -457,7 +457,7 @@ async function uploadToOdoo(orderId, pdfBytes, opportunityId) {
   if (existingSO.length) {
     await odoo.execute('ir.attachment', 'unlink', [existingSO.map(a => a.id)]);
   }
-  await odoo.create('ir.attachment', {
+  const soAttId = await odoo.create('ir.attachment', {
     name:      attName,
     type:      'binary',
     raw:       b64,
@@ -496,5 +496,61 @@ async function uploadToOdoo(orderId, pdfBytes, opportunityId) {
     }
   }
 
+  await addToDocuments(opportunityId, soAttId, attName);
+
   return attName;
+}
+
+// ---------------------------------------------------------------------------
+// addToDocuments — copia (envuelve) el adjunto del sale.order como
+// documents.document dentro de la subcarpeta 02_Ingenieria del proyecto
+// vinculado al lead. Bonus: cualquier fallo se loggea y se ignora, nunca
+// debe bloquear la generacion/subida del PDF.
+// ---------------------------------------------------------------------------
+async function addToDocuments(opportunityId, attachmentId, attachmentName) {
+  try {
+    if (!opportunityId) return;
+
+    const leads = await odoo.searchRead(
+      'crm.lead',
+      [['id', '=', opportunityId]],
+      ['project_ids'],
+    );
+    const projectIds = (leads.length && leads[0].project_ids) || [];
+    if (!projectIds.length) return;
+
+    const projects = await odoo.searchRead(
+      'project.project',
+      [['id', 'in', projectIds]],
+      ['id', 'documents_folder_id'],
+    );
+    const projectWithFolder = projects.find(p => p.documents_folder_id);
+    if (!projectWithFolder) return;
+    const rootFolderId = projectWithFolder.documents_folder_id[0];
+
+    const subfolders = await odoo.searchRead(
+      'documents.document',
+      [
+        ['folder_id', '=', rootFolderId],
+        ['is_folder', '=', true],
+        ['name', 'ilike', '02_Ingenieria'],
+      ],
+      ['id', 'name'],
+    );
+    if (!subfolders.length) {
+      console.warn('[generate-ficha] WARNING: subcarpeta 02_Ingenieria no encontrada en proyecto, omitiendo Documents');
+      return;
+    }
+    const ingenieriaFolderId = subfolders[0].id;
+
+    const docId = await odoo.create('documents.document', {
+      name:          attachmentName,
+      attachment_id: attachmentId,
+      folder_id:     ingenieriaFolderId,
+      res_model:     'sale.order',
+    });
+    console.log(`[generate-ficha] documents.document creado id=${docId} en carpeta 02_Ingenieria (folder_id=${ingenieriaFolderId})`);
+  } catch (err) {
+    console.warn(`[generate-ficha] No se pudo crear documents.document: ${err.message}`);
+  }
 }
