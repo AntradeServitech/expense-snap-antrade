@@ -2,11 +2,20 @@
  * generate-manual.js — Vercel serverless function
  * POST /api/generate-manual
  *
- * Genera el manual de montaje de un pedido: portada Antrade + paginas reales
- * de los PDFs tipo MANUAL_ adjuntos a los productos del pedido (o, si un
- * producto no tiene manuales propios, los del producto representativo de
- * su misma subcategoria). Se sube como ir.attachment al sale.order y,
- * si existe, tambien al crm.lead vinculado.
+ * Genera el manual de montaje de un pedido. Dos caminos segun el pedido:
+ *
+ *   FAST PATH (pedido de una sola familia): el PDF fusionado de esa familia
+ *   ya existe en Odoo como ir.attachment (ver 12_merge_family_manuals.py).
+ *   En vez de descargar + reconstruir + resubir, se copia server-side con
+ *   ir.attachment.copy() (sin transferir datos, <5s).
+ *
+ *   SLOW PATH (pedido con mas de una familia): descarga los PDFs fusionados
+ *   de cada familia involucrada, los combina en un solo PDF con portada
+ *   Antrade, y lo sube (con fallback de particion en 2 mitades si supera el
+ *   limite de subida del servidor).
+ *
+ * En ambos casos se sube como ir.attachment al sale.order y, si existe,
+ * tambien al crm.lead vinculado.
  *
  * Misma autenticacion que generate-ficha.js (FICHA_SECRET).
  */
@@ -71,21 +80,33 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const result = await buildManual(order_id);
+    const situation = await locateManuals(order_id);
 
-    if (!result.hasAny) {
+    if (!situation.tmplIdsWithManual.length) {
       return res.status(200).json({
         success: false,
-        sin_manual: result.sinManual,
+        sin_manual: situation.sinManual,
         message: 'No hay manuales disponibles',
       });
     }
 
-    const attName = await uploadToOdoo(order_id, result.pdfBytes, result.opportunityId);
+    // FAST PATH: todos los adjuntos a usar pertenecen a la misma familia
+    // (mismo res_id de origen) -> copy() server-side, sin descargar nada.
+    const fastPath = situation.familyResIds.size === 1;
+
+    let attName;
+    if (fastPath) {
+      attName = await fastPathCopy(order_id, situation);
+    } else {
+      const pdfBytes = await buildManualPdf(situation);
+      attName = await uploadToOdoo(order_id, pdfBytes, situation.opportunityId);
+    }
+
     return res.status(200).json({
       success: true,
       attachment: attName,
-      sin_manual: result.sinManual,
+      sin_manual: situation.sinManual,
+      fast_path: fastPath,
     });
   } catch (err) {
     console.error('[generate-manual] ERROR:', err.message);
@@ -94,9 +115,11 @@ module.exports = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------------
-// buildManual — localiza los manuales aplicables y genera el PDF
+// locateManuals — lee el pedido y localiza los manuales aplicables (PASO A +
+// PASO B), sin descargar binarios. Devuelve todo lo necesario para decidir
+// fast path vs slow path y para ejecutar cualquiera de los dos.
 // ---------------------------------------------------------------------------
-async function buildManual(orderId) {
+async function locateManuals(orderId) {
   // 1. Leer order
   const orders = await odoo.searchRead(
     'sale.order',
@@ -106,6 +129,7 @@ async function buildManual(orderId) {
   if (!orders.length) throw new Error(`sale.order id=${orderId} no encontrado`);
   const order = orders[0];
   const opportunityId = Array.isArray(order.opportunity_id) ? order.opportunity_id[0] : null;
+  const orderName = order.name;
 
   // 2. Idioma del cliente
   const partners = await odoo.searchRead(
@@ -143,10 +167,6 @@ async function buildManual(orderId) {
   const tmplById = Object.fromEntries(tmpls.map(t => [t.id, t]));
 
   // --- PASO A: manual fusionado propio de cada producto ---
-  // Cada familia tiene UN solo PDF fusionado MANUAL_FAMILIA_{codigo}_merged.pdf
-  // (o, si el archivo fusionado supero el limite de subida del servidor,
-  // 2 partes: ..._merged_part1of2.pdf / ..._merged_part2of2.pdf). Ya no hay
-  // N archivos individuales por familia (ver 12_merge_family_manuals.py).
   const manualsByTmpl = {};
   const ownManuals = await odoo.searchRead(
     'ir.attachment',
@@ -231,23 +251,115 @@ async function buildManual(orderId) {
   }
 
   const tmplIdsWithManual = tmplIds.filter(tid => manualsByTmpl[tid] && manualsByTmpl[tid].length);
-  if (!tmplIdsWithManual.length) {
-    return { hasAny: false, sinManual, pdfBytes: null, opportunityId };
+
+  // Adjuntos unicos que se van a usar (deduplicados por id) y de cuantas
+  // familias distintas provienen (por res_id del product.template origen).
+  // Si todos vienen del mismo res_id -> 1 sola familia -> fast path.
+  const usedAttsById = {};
+  for (const tid of tmplIdsWithManual) {
+    for (const att of manualsByTmpl[tid]) {
+      usedAttsById[att.id] = att;
+    }
+  }
+  const usedAtts = Object.values(usedAttsById);
+  const familyResIds = new Set(usedAtts.map(a => a.res_id));
+
+  return {
+    order, orderName, opportunityId, lang, L, partner: partners[0],
+    tmplIds, tmplById, manualsByTmpl, tmplIdsWithManual, sinManual,
+    usedAtts, familyResIds,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// fastPathCopy — pedido de una sola familia: copia server-side el/los PDF(s)
+// fusionados de esa familia con ir.attachment.copy(), sin descargar ni
+// reconstruir nada. NOTA: el resultado es el PDF de manuales tal cual existe
+// en Odoo, sin portada Antrade (a diferencia del slow path).
+// ---------------------------------------------------------------------------
+async function fastPathCopy(orderId, situation) {
+  const { opportunityId, orderName, usedAtts } = situation;
+  const sorted = [...usedAtts].sort((a, b) => a.name.localeCompare(b.name));
+  const baseNames = sorted.length === 1
+    ? [`Manual_Montaje_${orderName}.pdf`]
+    : sorted.map((_, i) => `Manual_Montaje_${orderName}_part${i + 1}of${sorted.length}.pdf`);
+
+  // Idempotente: borrar copias previas con el mismo patron de nombre
+  const existingSO = await odoo.searchRead(
+    'ir.attachment',
+    [
+      ['res_model', '=', 'sale.order'],
+      ['res_id', '=', orderId],
+      ['name', 'like', `Manual_Montaje_${orderName}%`],
+    ],
+    ['id'],
+  );
+  if (existingSO.length) {
+    await odoo.execute('ir.attachment', 'unlink', [existingSO.map(a => a.id)]);
   }
 
+  const newAtts = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const result = await odoo.execute('ir.attachment', 'copy', [[sorted[i].id], {
+      name:      baseNames[i],
+      res_model: 'sale.order',
+      res_id:    orderId,
+      res_name:  orderName,
+    }]);
+    const newId = Array.isArray(result) ? result[0] : result;
+    newAtts.push({ id: newId, name: baseNames[i] });
+  }
+  console.log(`[generate-manual] (fast path) ${newAtts.length} adjunto(s) copiado(s) server-side al sale.order id=${orderId}`);
+
+  if (opportunityId && opportunityId > 0) {
+    try {
+      const existingCRM = await odoo.searchRead(
+        'ir.attachment',
+        [
+          ['res_model', '=', 'crm.lead'],
+          ['res_id', '=', opportunityId],
+          ['name', 'like', `Manual_Montaje_${orderName}%`],
+        ],
+        ['id'],
+      );
+      if (existingCRM.length) {
+        await odoo.execute('ir.attachment', 'unlink', [existingCRM.map(a => a.id)]);
+      }
+      for (let i = 0; i < sorted.length; i++) {
+        await odoo.execute('ir.attachment', 'copy', [[sorted[i].id], {
+          name:      baseNames[i],
+          res_model: 'crm.lead',
+          res_id:    opportunityId,
+          res_name:  orderName,
+        }]);
+      }
+      console.log(`[generate-manual] (fast path) Adjunto(s) copiado(s) tambien a crm.lead id=${opportunityId}`);
+    } catch (crmErr) {
+      console.warn(`[generate-manual] (fast path) No se pudo copiar adjunto a crm.lead id=${opportunityId}: ${crmErr.message}`);
+    }
+  }
+
+  for (const att of newAtts) {
+    await addToDocuments(opportunityId, att.id, att.name);
+  }
+
+  return newAtts.length === 1 ? newAtts[0].name : newAtts.map(a => a.name).join(', ');
+}
+
+// ---------------------------------------------------------------------------
+// buildManualPdf — slow path: descarga los manuales de mas de una familia y
+// los combina en un solo PDF con portada Antrade.
+// ---------------------------------------------------------------------------
+async function buildManualPdf(situation) {
+  const { order, partner, lang, L, tmplIds, tmplById, manualsByTmpl, tmplIdsWithManual, usedAtts } = situation;
+
   // --- Descargar binarios de los manuales seleccionados (sin duplicar ids) ---
-  // Ya no hace falta el batching de antes: ahora hay 1-2 archivos por
-  // familia (un merged, o 2 partes si supero el limite de subida), nunca
-  // hasta 22. Pero se ha comprobado (2026-06-28) que dos descargas grandes
-  // (>=20MB) seguidas en la misma invocacion, sin pausa entre ellas, hacen
-  // que el servidor Odoo SaaS trial corte la conexion ("Unknown XML-RPC tag
-  // 'TITLE'") -- el mismo sintoma de sobrecarga ya documentado, ahora
-  // disparado por payload grande en vez de por cantidad de llamadas. Cada
-  // descarga individual reintenta hasta 3 veces, con una pequena pausa
-  // entre adjuntos distintos para no encadenar dos descargas pesadas.
-  const allAttIds = [...new Set(
-    tmplIdsWithManual.flatMap(tid => manualsByTmpl[tid].map(a => a.id)),
-  )];
+  // Se ha comprobado que dos descargas grandes (>=20MB) seguidas en la misma
+  // invocacion, sin pausa entre ellas, hacen que el servidor Odoo SaaS trial
+  // corte la conexion ("Unknown XML-RPC tag 'TITLE'"). Cada descarga
+  // individual reintenta hasta 3 veces, con una pequena pausa entre
+  // adjuntos distintos para no encadenar dos descargas pesadas.
+  const allAttIds = [...new Set(usedAtts.map(a => a.id))];
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const attDataById = {};
   for (let i = 0; i < allAttIds.length; i++) {
@@ -291,7 +403,7 @@ async function buildManual(orderId) {
     ? new Date(order.date_order).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-GB')
     : '';
 
-  addCoverPage(pdfDoc, boldFont, regFont, logoImage, order, partners[0], tmplIds, tmplById, dateStr, L);
+  addCoverPage(pdfDoc, boldFont, regFont, logoImage, order, partner, tmplIds, tmplById, dateStr, L);
 
   // Embebe cada adjunto una sola vez aunque varios productos compartan
   // el mismo manual heredado (PASO B). Orden alfabetico por nombre para
@@ -317,7 +429,7 @@ async function buildManual(orderId) {
     }
   }
 
-  return { hasAny: true, sinManual, pdfBytes: await pdfDoc.save(), opportunityId };
+  return pdfDoc.save();
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +584,7 @@ async function uploadPdfWithSplitFallback(baseName, pdfBytes, resModel, resId) {
 
 // ---------------------------------------------------------------------------
 // uploadToOdoo — sube el PDF como ir.attachment al sale.order y, si existe,
-// tambien al crm.lead vinculado (opportunity_id).
+// tambien al crm.lead vinculado (opportunity_id). Solo se usa en el slow path.
 // ---------------------------------------------------------------------------
 async function uploadToOdoo(orderId, pdfBytes, opportunityId) {
   const orders = await odoo.searchRead(
