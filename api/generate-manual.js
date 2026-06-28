@@ -142,14 +142,18 @@ async function buildManual(orderId) {
   );
   const tmplById = Object.fromEntries(tmpls.map(t => [t.id, t]));
 
-  // --- PASO A: manuales propios de cada producto ---
+  // --- PASO A: manual fusionado propio de cada producto ---
+  // Cada familia tiene UN solo PDF fusionado MANUAL_FAMILIA_{codigo}_merged.pdf
+  // (o, si el archivo fusionado supero el limite de subida del servidor,
+  // 2 partes: ..._merged_part1of2.pdf / ..._merged_part2of2.pdf). Ya no hay
+  // N archivos individuales por familia (ver 12_merge_family_manuals.py).
   const manualsByTmpl = {};
   const ownManuals = await odoo.searchRead(
     'ir.attachment',
     [
       ['res_model', '=', 'product.template'],
       ['res_id', 'in', tmplIds],
-      ['name', 'like', 'MANUAL_%'],
+      ['name', 'like', 'MANUAL_FAMILIA_%'],
       ['mimetype', '=', 'application/pdf'],
     ],
     ['id', 'name', 'res_id'],
@@ -159,7 +163,7 @@ async function buildManual(orderId) {
     manualsByTmpl[att.res_id].push(att);
   }
 
-  // --- PASO B: para los productos sin manuales propios, buscar en hermanos
+  // --- PASO B: para los productos sin manual propio, buscar en hermanos
   // de la misma categoria (cubre al producto representativo de la familia) ---
   const missingTmplIds = tmplIds.filter(tid => !manualsByTmpl[tid] || !manualsByTmpl[tid].length);
   if (missingTmplIds.length) {
@@ -190,7 +194,7 @@ async function buildManual(orderId) {
             [
               ['res_model', '=', 'product.template'],
               ['res_id', 'in', allSiblingIds],
-              ['name', 'like', 'MANUAL_%'],
+              ['name', 'like', 'MANUAL_FAMILIA_%'],
               ['mimetype', '=', 'application/pdf'],
             ],
             ['id', 'name', 'res_id'],
@@ -232,34 +236,23 @@ async function buildManual(orderId) {
   }
 
   // --- Descargar binarios de los manuales seleccionados (sin duplicar ids) ---
-  // Una llamada por adjunto, en lotes pequenos (no todas en paralelo ni
-  // todas en un unico search_read): cada llamada de _lib/odoo.js abre una
-  // conexion XML-RPC nueva, y disparar muchas a la vez (probado: las 40 de
-  // este pedido) satura el servidor Odoo, que responde con una pagina de
-  // error HTML en vez de XML-RPC valido (error "Unknown XML-RPC tag
-  // 'TITLE'"). Con lotes de 4 no se reprodujo el fallo.
-  const BATCH_SIZE = 4;
+  // Ya no hace falta el batching de antes: ahora hay 1-2 archivos por
+  // familia (un merged, o 2 partes si supero el limite de subida), nunca
+  // hasta 22. Una llamada por adjunto es suficiente.
   const allAttIds = [...new Set(
     tmplIdsWithManual.flatMap(tid => manualsByTmpl[tid].map(a => a.id)),
   )];
   const attDataById = {};
-  for (let i = 0; i < allAttIds.length; i += BATCH_SIZE) {
-    const batch = allAttIds.slice(i, i + BATCH_SIZE);
-    const results = await Promise.all(batch.map(async (id) => {
-      try {
-        const single = await odoo.searchRead(
-          'ir.attachment',
-          [['id', '=', id]],
-          ['id', 'name', 'raw'],
-        );
-        return single.length ? single[0] : null;
-      } catch (e) {
-        console.warn(`[generate-manual] No se pudo descargar adjunto id=${id}: ${e.message}`);
-        return null;
-      }
-    }));
-    for (const att of results) {
-      if (att) attDataById[att.id] = att;
+  for (const id of allAttIds) {
+    try {
+      const single = await odoo.searchRead(
+        'ir.attachment',
+        [['id', '=', id]],
+        ['id', 'name', 'raw'],
+      );
+      if (single.length) attDataById[single[0].id] = single[0];
+    } catch (e) {
+      console.warn(`[generate-manual] No se pudo descargar adjunto id=${id}: ${e.message}`);
     }
   }
 
@@ -282,10 +275,13 @@ async function buildManual(orderId) {
   addCoverPage(pdfDoc, boldFont, regFont, logoImage, order, partners[0], tmplIds, tmplById, dateStr, L);
 
   // Embebe cada adjunto una sola vez aunque varios productos compartan
-  // el mismo manual heredado (PASO B).
+  // el mismo manual heredado (PASO B). Orden alfabetico por nombre para
+  // que, si el merged esta partido en 2, part1of2 se incruste antes que
+  // part2of2.
   const embeddedIds = new Set();
   for (const tid of tmplIdsWithManual) {
-    for (const att of manualsByTmpl[tid]) {
+    const attsForTid = [...manualsByTmpl[tid]].sort((a, b) => a.name.localeCompare(b.name));
+    for (const att of attsForTid) {
       if (embeddedIds.has(att.id)) continue;
       embeddedIds.add(att.id);
 
