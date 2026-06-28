@@ -473,17 +473,12 @@ async function addToDocuments(opportunityId, attachmentId, attachmentName) {
   try {
     if (!opportunityId) return;
 
-    const leads = await odoo.searchRead(
-      'crm.lead',
-      [['id', '=', opportunityId]],
-      ['project_ids'],
-    );
-    const projectIds = (leads.length && leads[0].project_ids) || [];
-    if (!projectIds.length) return;
-
+    // El vinculo lead -> proyecto en esta instancia se hace via el campo
+    // personalizado project.project.x_lead_id (crm.lead.project_ids, el
+    // campo nativo, esta vacio en todos los leads reales probados).
     const projects = await odoo.searchRead(
       'project.project',
-      [['id', 'in', projectIds]],
+      [['x_lead_id', '=', opportunityId]],
       ['id', 'documents_folder_id'],
     );
     const projectWithFolder = projects.find(p => p.documents_folder_id);
