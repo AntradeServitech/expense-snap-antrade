@@ -232,15 +232,28 @@ async function buildManual(orderId) {
   }
 
   // --- Descargar binarios de los manuales seleccionados (sin duplicar ids) ---
+  // Una llamada por adjunto (en paralelo) en vez de agruparlos todos en un
+  // unico search_read: los manuales son archivos grandes (varios MB cada
+  // uno) y pedirlos todos juntos puede superar el limite de payload entre
+  // Vercel y Odoo (confirmado: error "Unknown XML-RPC tag 'TITLE'", que es
+  // una pagina de error HTML que el cliente XML-RPC no sabe parsear).
   const allAttIds = [...new Set(
     tmplIdsWithManual.flatMap(tid => manualsByTmpl[tid].map(a => a.id)),
   )];
-  const attData = await odoo.searchRead(
-    'ir.attachment',
-    [['id', 'in', allAttIds]],
-    ['id', 'name', 'raw'],
-  );
-  const attDataById = Object.fromEntries(attData.map(a => [a.id, a]));
+  const attEntries = await Promise.all(allAttIds.map(async (id) => {
+    try {
+      const single = await odoo.searchRead(
+        'ir.attachment',
+        [['id', '=', id]],
+        ['id', 'name', 'raw'],
+      );
+      return single.length ? single[0] : null;
+    } catch (e) {
+      console.warn(`[generate-manual] No se pudo descargar adjunto id=${id}: ${e.message}`);
+      return null;
+    }
+  }));
+  const attDataById = Object.fromEntries(attEntries.filter(Boolean).map(a => [a.id, a]));
 
   // --- Construir el PDF ---
   const pdfDoc = await PDFDocument.create();
