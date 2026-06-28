@@ -160,6 +160,7 @@ async function buildFicha(orderId) {
       ['res_model', '=', 'product.template'],
       ['res_id', 'in', tmplIds],
       ['mimetype', '=', 'application/pdf'],
+      ['name', 'not like', 'MANUAL_%'],
     ],
     ['id', 'name', 'res_id', 'file_size'],
   );
