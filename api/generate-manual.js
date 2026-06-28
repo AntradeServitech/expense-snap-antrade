@@ -410,6 +410,67 @@ function safeText(str) {
 }
 
 // ---------------------------------------------------------------------------
+// uploadOneAttachment — sube pdfBytes como ir.attachment, con reintentos.
+// Devuelve el id creado o null si fallan todos los intentos.
+// ---------------------------------------------------------------------------
+async function uploadOneAttachment(name, pdfBytes, resModel, resId, maxAttempts) {
+  const b64 = Buffer.from(pdfBytes).toString('base64');
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const attId = await odoo.create('ir.attachment', {
+        name, type: 'binary', raw: b64,
+        res_model: resModel, res_id: resId, mimetype: 'application/pdf',
+      });
+      return attId;
+    } catch (e) {
+      console.warn(`[generate-manual] Intento ${attempt}/${maxAttempts} de subida de "${name}" fallido: ${e.message}`);
+      if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// uploadPdfWithSplitFallback — sube pdfBytes con el nombre base dado.
+// Si la subida falla repetidamente (sospecha de limite de tamano de
+// payload en el servidor Odoo SaaS trial -- comprobado: pedidos que
+// combinan 2 familias completas pueden superar ~64MB), parte el PDF por la
+// mitad de sus paginas y reintenta cada mitad por separado (recursivo).
+// Devuelve una lista de { name, attId }.
+// ---------------------------------------------------------------------------
+async function uploadPdfWithSplitFallback(baseName, pdfBytes, resModel, resId) {
+  const attId = await uploadOneAttachment(baseName, pdfBytes, resModel, resId, 3);
+  if (attId !== null) return [{ name: baseName, attId }];
+
+  const src = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+  const pageCount = src.getPageCount();
+  if (pageCount <= 1) {
+    console.warn(`[generate-manual] No se pudo subir "${baseName}" (1 sola pagina, no se puede partir mas).`);
+    return [];
+  }
+
+  console.warn(`[generate-manual] Subida de "${baseName}" fallo repetidamente (posible limite de tamano del servidor). Partiendo PDF en 2 mitades de paginas...`);
+  const mid = Math.ceil(pageCount / 2);
+  const ranges = [[0, mid], [mid, pageCount]];
+  const nameRoot = baseName.endsWith('.pdf') ? baseName.slice(0, -4) : baseName;
+
+  const results = [];
+  for (let i = 0; i < ranges.length; i++) {
+    const [start, end] = ranges[i];
+    const half = await PDFDocument.create();
+    const indices = [];
+    for (let p = start; p < end; p++) indices.push(p);
+    const pages = await half.copyPages(src, indices);
+    for (const p of pages) half.addPage(p);
+    const halfBytes = await half.save();
+    const halfName = `${nameRoot}_part${i + 1}of2.pdf`;
+    const subResults = await uploadPdfWithSplitFallback(halfName, halfBytes, resModel, resId);
+    results.push(...subResults);
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // uploadToOdoo — sube el PDF como ir.attachment al sale.order y, si existe,
 // tambien al crm.lead vinculado (opportunity_id).
 // ---------------------------------------------------------------------------
@@ -422,28 +483,23 @@ async function uploadToOdoo(orderId, pdfBytes, opportunityId) {
   );
   const orderName = orders.length ? orders[0].name : `order-${orderId}`;
   const attName   = `Manual_Montaje_${orderName}.pdf`;
-  const b64 = Buffer.from(pdfBytes).toString('base64');
 
   const existingSO = await odoo.searchRead(
     'ir.attachment',
     [
       ['res_model', '=', 'sale.order'],
       ['res_id', '=', orderId],
-      ['name', '=', attName],
+      ['name', 'like', `Manual_Montaje_${orderName}%`],
     ],
     ['id'],
   );
   if (existingSO.length) {
     await odoo.execute('ir.attachment', 'unlink', [existingSO.map(a => a.id)]);
   }
-  const soAttId = await odoo.create('ir.attachment', {
-    name:      attName,
-    type:      'binary',
-    raw:       b64,
-    res_model: 'sale.order',
-    res_id:    orderId,
-    mimetype:  'application/pdf',
-  });
+  const soParts = await uploadPdfWithSplitFallback(attName, pdfBytes, 'sale.order', orderId);
+  if (!soParts.length) {
+    throw new Error(`No se pudo subir "${attName}" al sale.order (ni partido en mitades).`);
+  }
 
   if (opportunityId && opportunityId > 0) {
     try {
@@ -452,30 +508,29 @@ async function uploadToOdoo(orderId, pdfBytes, opportunityId) {
         [
           ['res_model', '=', 'crm.lead'],
           ['res_id', '=', opportunityId],
-          ['name', '=', attName],
+          ['name', 'like', `Manual_Montaje_${orderName}%`],
         ],
         ['id'],
       );
       if (existingCRM.length) {
         await odoo.execute('ir.attachment', 'unlink', [existingCRM.map(a => a.id)]);
       }
-      await odoo.create('ir.attachment', {
-        name:      attName,
-        type:      'binary',
-        raw:       b64,
-        res_model: 'crm.lead',
-        res_id:    opportunityId,
-        mimetype:  'application/pdf',
-      });
-      console.log(`[generate-manual] Adjunto subido tambien a crm.lead id=${opportunityId}`);
+      const crmParts = await uploadPdfWithSplitFallback(attName, pdfBytes, 'crm.lead', opportunityId);
+      if (crmParts.length) {
+        console.log(`[generate-manual] Adjunto subido tambien a crm.lead id=${opportunityId} (${crmParts.length} parte(s))`);
+      } else {
+        console.warn(`[generate-manual] No se pudo subir adjunto a crm.lead id=${opportunityId} (ni partido)`);
+      }
     } catch (crmErr) {
       console.warn(`[generate-manual] No se pudo subir adjunto a crm.lead id=${opportunityId}: ${crmErr.message}`);
     }
   }
 
-  await addToDocuments(opportunityId, soAttId, attName);
+  for (const part of soParts) {
+    await addToDocuments(opportunityId, part.attId, part.name);
+  }
 
-  return attName;
+  return soParts.length === 1 ? soParts[0].name : soParts.map(p => p.name).join(', ');
 }
 
 // ---------------------------------------------------------------------------
