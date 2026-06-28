@@ -238,21 +238,40 @@ async function buildManual(orderId) {
   // --- Descargar binarios de los manuales seleccionados (sin duplicar ids) ---
   // Ya no hace falta el batching de antes: ahora hay 1-2 archivos por
   // familia (un merged, o 2 partes si supero el limite de subida), nunca
-  // hasta 22. Una llamada por adjunto es suficiente.
+  // hasta 22. Pero se ha comprobado (2026-06-28) que dos descargas grandes
+  // (>=20MB) seguidas en la misma invocacion, sin pausa entre ellas, hacen
+  // que el servidor Odoo SaaS trial corte la conexion ("Unknown XML-RPC tag
+  // 'TITLE'") -- el mismo sintoma de sobrecarga ya documentado, ahora
+  // disparado por payload grande en vez de por cantidad de llamadas. Cada
+  // descarga individual reintenta hasta 3 veces, con una pequena pausa
+  // entre adjuntos distintos para no encadenar dos descargas pesadas.
   const allAttIds = [...new Set(
     tmplIdsWithManual.flatMap(tid => manualsByTmpl[tid].map(a => a.id)),
   )];
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const attDataById = {};
-  for (const id of allAttIds) {
-    try {
-      const single = await odoo.searchRead(
-        'ir.attachment',
-        [['id', '=', id]],
-        ['id', 'name', 'raw'],
-      );
-      if (single.length) attDataById[single[0].id] = single[0];
-    } catch (e) {
-      console.warn(`[generate-manual] No se pudo descargar adjunto id=${id}: ${e.message}`);
+  for (let i = 0; i < allAttIds.length; i++) {
+    const id = allAttIds[i];
+    if (i > 0) await sleep(1500);
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const single = await odoo.searchRead(
+          'ir.attachment',
+          [['id', '=', id]],
+          ['id', 'name', 'raw'],
+        );
+        if (single.length) attDataById[single[0].id] = single[0];
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`[generate-manual] Intento ${attempt}/3 de descarga del adjunto id=${id} fallido: ${e.message}`);
+        if (attempt < 3) await sleep(2000);
+      }
+    }
+    if (lastErr) {
+      console.warn(`[generate-manual] No se pudo descargar adjunto id=${id} tras 3 intentos: ${lastErr.message}`);
     }
   }
 
