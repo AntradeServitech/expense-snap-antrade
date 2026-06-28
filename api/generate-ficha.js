@@ -538,11 +538,13 @@ async function addToDocuments(opportunityId, attachmentId, attachmentName) {
     }
     const ingenieriaFolderId = subfolders[0].id;
 
+    // NOTA: no se pasa res_model/res_id aqui a proposito. Probado: si se
+    // pasa res_model='sale.order' (sin res_id), Odoo sobreescribe el
+    // res_id del ir.attachment original a 0, desvinculandolo del pedido.
     const docId = await odoo.create('documents.document', {
       name:          attachmentName,
       attachment_id: attachmentId,
       folder_id:     ingenieriaFolderId,
-      res_model:     'sale.order',
     });
     console.log(`[generate-ficha] documents.document creado id=${docId} en carpeta 02_Ingenieria (folder_id=${ingenieriaFolderId})`);
   } catch (err) {
