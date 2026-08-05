@@ -186,9 +186,34 @@ async function locateManuals(orderId) {
   // --- PASO B: para los productos sin manual propio, buscar en hermanos
   // de la misma categoria (cubre al producto representativo de la familia) ---
   const missingTmplIds = tmplIds.filter(tid => !manualsByTmpl[tid] || !manualsByTmpl[tid].length);
-  if (missingTmplIds.length) {
+
+  // PASO B.0: antes de buscar en Odoo, reusar el manual de otro producto del
+  // MISMO pedido que comparta categoria. Ejemplo: BVTE3284AE (sin manual propio)
+  // y BVTE3281C (con manual 800A) estan en la misma categ -> se reutiliza el
+  // manual ya resuelto en PASO A, sin necesidad de buscar hermanos externos.
+  // Esto evita que product.template._order='name' provoque una asignacion de
+  // familia incorrecta (el primer hermano por orden alfabetico puede ser de
+  // otra familia) y mantiene el fast path cuando todos los productos del
+  // pedido son de la misma familia.
+  for (const tid of missingTmplIds) {
+    const tmpl = tmplById[tid];
+    if (!tmpl || !tmpl.categ_id) continue;
+    const cid = Array.isArray(tmpl.categ_id) ? tmpl.categ_id[0] : tmpl.categ_id;
+    const inOrderMatch = tmplIds.find(other =>
+      other !== tid &&
+      manualsByTmpl[other] && manualsByTmpl[other].length &&
+      tmplById[other] &&
+      (Array.isArray(tmplById[other].categ_id) ? tmplById[other].categ_id[0] : tmplById[other].categ_id) === cid,
+    );
+    if (inOrderMatch) {
+      manualsByTmpl[tid] = manualsByTmpl[inOrderMatch];
+    }
+  }
+
+  const stillMissingTmplIds = tmplIds.filter(tid => !manualsByTmpl[tid] || !manualsByTmpl[tid].length);
+  if (stillMissingTmplIds.length) {
     const categIds = [...new Set(
-      missingTmplIds
+      stillMissingTmplIds
         .map(tid => tmplById[tid] && tmplById[tid].categ_id)
         .filter(Boolean)
         .map(c => (Array.isArray(c) ? c[0] : c)),
@@ -226,7 +251,7 @@ async function locateManuals(orderId) {
         manualsBySiblingId[att.res_id].push(att);
       }
 
-      for (const tid of missingTmplIds) {
+      for (const tid of stillMissingTmplIds) {
         const tmpl = tmplById[tid];
         if (!tmpl || !tmpl.categ_id) continue;
         const cid = Array.isArray(tmpl.categ_id) ? tmpl.categ_id[0] : tmpl.categ_id;
