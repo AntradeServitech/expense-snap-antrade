@@ -1,6 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "public",
+  "functions": {
+    "api/generate-manual.js": { "maxDuration": 120 },
+    "api/generate-ficha.js":  { "maxDuration": 120 }
+  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" }
   ],

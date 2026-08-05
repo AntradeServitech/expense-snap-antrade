@@ -297,10 +297,51 @@ async function locateManuals(orderId) {
 }
 
 // ---------------------------------------------------------------------------
+// copyAttViaServer — copia un ir.attachment usando un ir.actions.server
+// temporal ejecutado dentro del proceso Python de Odoo.
+// Evita transferir el binario por XML-RPC (que causa socket reset para
+// archivos >~30MB contra el Odoo SaaS trial): el XML-RPC solo transfiere el
+// ID de la accion y devuelve false; la copia de archivo ocurre en el servidor.
+// model_id=4549 = sale.order (constante documentada en CLAUDE.md).
+// ---------------------------------------------------------------------------
+async function copyAttViaServer(sourceAttId, targetName, resModel, resId, resName) {
+  const esc = (s) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const code = `env['ir.attachment'].browse(${sourceAttId}).copy({'name': '${esc(targetName)}', 'res_model': '${resModel}', 'res_id': ${resId}, 'res_name': '${esc(resName)}'})`;
+
+  let actionId;
+  try {
+    actionId = await odoo.create('ir.actions.server', {
+      name:     '_tmp_att_copy',
+      model_id: 4549,
+      state:    'code',
+      code:     code,
+    });
+    await odoo.execute('ir.actions.server', 'run', [[actionId]], {
+      context: { active_model: 'sale.order', active_id: resId, active_ids: [resId] },
+    });
+  } finally {
+    if (actionId) {
+      try { await odoo.execute('ir.actions.server', 'unlink', [[actionId]]); } catch (_e) {}
+    }
+  }
+
+  const found = await odoo.searchRead(
+    'ir.attachment',
+    [['res_model', '=', resModel], ['res_id', '=', resId], ['name', '=', targetName]],
+    ['id', 'name'],
+    { limit: 1 },
+  );
+  if (!found.length) {
+    throw new Error(`copyAttViaServer: adjunto '${targetName}' no encontrado en ${resModel} id=${resId} tras la copia`);
+  }
+  return found[0].id;
+}
+
+// ---------------------------------------------------------------------------
 // fastPathCopy — pedido de una sola familia: copia server-side el/los PDF(s)
-// fusionados de esa familia con ir.attachment.copy(), sin descargar ni
-// reconstruir nada. NOTA: el resultado es el PDF de manuales tal cual existe
-// en Odoo, sin portada Antrade (a diferencia del slow path).
+// fusionados de esa familia sin descargar ni reconstruir nada.
+// NOTA: el resultado es el PDF de manuales tal cual existe en Odoo, sin
+// portada Antrade (a diferencia del slow path).
 // ---------------------------------------------------------------------------
 async function fastPathCopy(orderId, situation) {
   const { opportunityId, orderName, usedAtts } = situation;
@@ -325,13 +366,7 @@ async function fastPathCopy(orderId, situation) {
 
   const newAtts = [];
   for (let i = 0; i < sorted.length; i++) {
-    const result = await odoo.execute('ir.attachment', 'copy', [[sorted[i].id], {
-      name:      baseNames[i],
-      res_model: 'sale.order',
-      res_id:    orderId,
-      res_name:  orderName,
-    }]);
-    const newId = Array.isArray(result) ? result[0] : result;
+    const newId = await copyAttViaServer(sorted[i].id, baseNames[i], 'sale.order', orderId, orderName);
     newAtts.push({ id: newId, name: baseNames[i] });
   }
   console.log(`[generate-manual] (fast path) ${newAtts.length} adjunto(s) copiado(s) server-side al sale.order id=${orderId}`);
@@ -351,12 +386,7 @@ async function fastPathCopy(orderId, situation) {
         await odoo.execute('ir.attachment', 'unlink', [existingCRM.map(a => a.id)]);
       }
       for (let i = 0; i < sorted.length; i++) {
-        await odoo.execute('ir.attachment', 'copy', [[sorted[i].id], {
-          name:      baseNames[i],
-          res_model: 'crm.lead',
-          res_id:    opportunityId,
-          res_name:  orderName,
-        }]);
+        await copyAttViaServer(sorted[i].id, baseNames[i], 'crm.lead', opportunityId, orderName);
       }
       console.log(`[generate-manual] (fast path) Adjunto(s) copiado(s) tambien a crm.lead id=${opportunityId}`);
     } catch (crmErr) {
