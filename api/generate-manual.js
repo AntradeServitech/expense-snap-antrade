@@ -2,19 +2,12 @@
  * generate-manual.js — Vercel serverless function
  * POST /api/generate-manual
  *
- * Genera el manual de montaje de un pedido. Dos caminos segun el pedido:
+ * Genera el manual de montaje de un pedido. Descarga los PDFs fusionados
+ * de cada familia involucrada, los combina en un solo PDF con portada
+ * Antrade, y lo sube (con fallback de particion en 2 mitades si supera el
+ * limite de subida del servidor).
  *
- *   FAST PATH (pedido de una sola familia): el PDF fusionado de esa familia
- *   ya existe en Odoo como ir.attachment (ver 12_merge_family_manuals.py).
- *   En vez de descargar + reconstruir + resubir, se copia server-side con
- *   ir.attachment.copy() (sin transferir datos, <5s).
- *
- *   SLOW PATH (pedido con mas de una familia): descarga los PDFs fusionados
- *   de cada familia involucrada, los combina en un solo PDF con portada
- *   Antrade, y lo sube (con fallback de particion en 2 mitades si supera el
- *   limite de subida del servidor).
- *
- * En ambos casos se sube como ir.attachment al sale.order y, si existe,
+ * Se sube como ir.attachment al sale.order y, si existe,
  * tambien al crm.lead vinculado.
  *
  * Misma autenticacion que generate-ficha.js (FICHA_SECRET).
@@ -90,23 +83,13 @@ module.exports = async (req, res) => {
       });
     }
 
-    // FAST PATH: todos los adjuntos a usar pertenecen a la misma familia
-    // (mismo res_id de origen) -> copy() server-side, sin descargar nada.
-    const fastPath = situation.familyResIds.size === 1;
-
-    let attName;
-    if (fastPath) {
-      attName = await fastPathCopy(order_id, situation);
-    } else {
-      const pdfBytes = await buildManualPdf(situation);
-      attName = await uploadToOdoo(order_id, pdfBytes, situation.opportunityId);
-    }
+    const pdfBytes = await buildManualPdf(situation);
+    const attName = await uploadToOdoo(order_id, pdfBytes, situation.opportunityId);
 
     return res.status(200).json({
       success: true,
       attachment: attName,
       sin_manual: situation.sinManual,
-      fast_path: fastPath,
     });
   } catch (err) {
     console.error('[generate-manual] ERROR:', err.message);
@@ -294,111 +277,6 @@ async function locateManuals(orderId) {
     tmplIds, tmplById, manualsByTmpl, tmplIdsWithManual, sinManual,
     usedAtts, familyResIds,
   };
-}
-
-// ---------------------------------------------------------------------------
-// copyAttViaServer — copia un ir.attachment usando un ir.actions.server
-// temporal ejecutado dentro del proceso Python de Odoo.
-// Evita transferir el binario por XML-RPC (que causa socket reset para
-// archivos >~30MB contra el Odoo SaaS trial): el XML-RPC solo transfiere el
-// ID de la accion y devuelve false; la copia de archivo ocurre en el servidor.
-// model_id=4549 = sale.order (constante documentada en CLAUDE.md).
-// ---------------------------------------------------------------------------
-async function copyAttViaServer(sourceAttId, targetName, resModel, resId, resName) {
-  const esc = (s) => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  const code = `env['ir.attachment'].browse(${sourceAttId}).copy({'name': '${esc(targetName)}', 'res_model': '${resModel}', 'res_id': ${resId}, 'res_name': '${esc(resName)}'})`;
-
-  let actionId;
-  try {
-    actionId = await odoo.create('ir.actions.server', {
-      name:     '_tmp_att_copy',
-      model_id: 4549,
-      state:    'code',
-      code:     code,
-    });
-    await odoo.execute('ir.actions.server', 'run', [[actionId]], {
-      context: { active_model: 'sale.order', active_id: resId, active_ids: [resId] },
-    });
-  } finally {
-    if (actionId) {
-      try { await odoo.execute('ir.actions.server', 'unlink', [[actionId]]); } catch (_e) {}
-    }
-  }
-
-  const found = await odoo.searchRead(
-    'ir.attachment',
-    [['res_model', '=', resModel], ['res_id', '=', resId], ['name', '=', targetName]],
-    ['id', 'name'],
-    { limit: 1 },
-  );
-  if (!found.length) {
-    throw new Error(`copyAttViaServer: adjunto '${targetName}' no encontrado en ${resModel} id=${resId} tras la copia`);
-  }
-  return found[0].id;
-}
-
-// ---------------------------------------------------------------------------
-// fastPathCopy — pedido de una sola familia: copia server-side el/los PDF(s)
-// fusionados de esa familia sin descargar ni reconstruir nada.
-// NOTA: el resultado es el PDF de manuales tal cual existe en Odoo, sin
-// portada Antrade (a diferencia del slow path).
-// ---------------------------------------------------------------------------
-async function fastPathCopy(orderId, situation) {
-  const { opportunityId, orderName, usedAtts } = situation;
-  const sorted = [...usedAtts].sort((a, b) => a.name.localeCompare(b.name));
-  const baseNames = sorted.length === 1
-    ? [`Manual_Montaje_${orderName}.pdf`]
-    : sorted.map((_, i) => `Manual_Montaje_${orderName}_part${i + 1}of${sorted.length}.pdf`);
-
-  // Idempotente: borrar copias previas con el mismo patron de nombre
-  const existingSO = await odoo.searchRead(
-    'ir.attachment',
-    [
-      ['res_model', '=', 'sale.order'],
-      ['res_id', '=', orderId],
-      ['name', 'like', `Manual_Montaje_${orderName}%`],
-    ],
-    ['id'],
-  );
-  if (existingSO.length) {
-    await odoo.execute('ir.attachment', 'unlink', [existingSO.map(a => a.id)]);
-  }
-
-  const newAtts = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const newId = await copyAttViaServer(sorted[i].id, baseNames[i], 'sale.order', orderId, orderName);
-    newAtts.push({ id: newId, name: baseNames[i] });
-  }
-  console.log(`[generate-manual] (fast path) ${newAtts.length} adjunto(s) copiado(s) server-side al sale.order id=${orderId}`);
-
-  if (opportunityId && opportunityId > 0) {
-    try {
-      const existingCRM = await odoo.searchRead(
-        'ir.attachment',
-        [
-          ['res_model', '=', 'crm.lead'],
-          ['res_id', '=', opportunityId],
-          ['name', 'like', `Manual_Montaje_${orderName}%`],
-        ],
-        ['id'],
-      );
-      if (existingCRM.length) {
-        await odoo.execute('ir.attachment', 'unlink', [existingCRM.map(a => a.id)]);
-      }
-      for (let i = 0; i < sorted.length; i++) {
-        await copyAttViaServer(sorted[i].id, baseNames[i], 'crm.lead', opportunityId, orderName);
-      }
-      console.log(`[generate-manual] (fast path) Adjunto(s) copiado(s) tambien a crm.lead id=${opportunityId}`);
-    } catch (crmErr) {
-      console.warn(`[generate-manual] (fast path) No se pudo copiar adjunto a crm.lead id=${opportunityId}: ${crmErr.message}`);
-    }
-  }
-
-  for (const att of newAtts) {
-    await addToDocuments(opportunityId, att.id, att.name);
-  }
-
-  return newAtts.length === 1 ? newAtts[0].name : newAtts.map(a => a.name).join(', ');
 }
 
 // ---------------------------------------------------------------------------
