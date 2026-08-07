@@ -3,7 +3,6 @@
 //   - PDF: extracción de texto local con pdf-parse (sin Vision API).
 //   - Imagen: OCR con Google Cloud Vision; opcionalmente estructuración con Claude.
 // No escribe nada en Odoo.
-const pdfParse = require('pdf-parse/lib/pdf-parse.js');
 const GOOGLE_VISION_ENDPOINT = 'https://vision.googleapis.com/v1/images:annotate';
 
 const STRUCTURE_SYSTEM_PROMPT = `Eres un asistente que extrae datos estructurados de texto de tickets y facturas. El texto puede estar en cualquier idioma. Devuelve SOLO un JSON válido sin markdown con esta estructura exacta:
@@ -79,6 +78,7 @@ async function ocrWithGoogleVision(image, apiKey) {
 }
 
 async function extractPdfText(base64Pdf) {
+  const pdfParse = require('pdf-parse/lib/pdf-parse.js');
   const buffer = Buffer.from(base64Pdf, 'base64');
   const data = await pdfParse(buffer);
   return (data && data.text) || '';
