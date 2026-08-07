@@ -1,9 +1,9 @@
 // POST /api/analyze
-// Recibe { image: <base64 sin prefijo>, mimeType } y extrae los datos del ticket en 2 fases:
-//   1) OCR con Google Cloud Vision (texto completo del ticket).
-//   2) Estructuración del texto a JSON con Claude (claude-sonnet-4-6), si ANTHROPIC_API_KEY
-//      está configurada; si no, se usa un parser heurístico (regex) como respaldo.
+// Recibe { image: <base64 sin prefijo>, mimeType } y extrae los datos del ticket/factura:
+//   - PDF: extracción de texto local con pdf-parse (sin Vision API).
+//   - Imagen: OCR con Google Cloud Vision; opcionalmente estructuración con Claude.
 // No escribe nada en Odoo.
+const pdfParse = require('pdf-parse/lib/pdf-parse.js');
 const GOOGLE_VISION_ENDPOINT = 'https://vision.googleapis.com/v1/images:annotate';
 
 const STRUCTURE_SYSTEM_PROMPT = `Eres un asistente que extrae datos estructurados de texto de tickets y facturas. El texto puede estar en cualquier idioma. Devuelve SOLO un JSON válido sin markdown con esta estructura exacta:
@@ -18,7 +18,7 @@ const STRUCTURE_SYSTEM_PROMPT = `Eres un asistente que extrae datos estructurado
 }
 Si no puedes leer algun campo, usa null.`;
 
-const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf', 'application/x-pdf'];
 const MAX_BASE64_CHARS = 6_000_000; // ~4.5MB binario, margen para el límite de body de Vercel
 
 const CATEGORY_KEYWORDS = {
@@ -62,6 +62,7 @@ async function ocrWithGoogleVision(image, apiKey) {
         },
       ],
     }),
+    signal: AbortSignal.timeout(25_000),
   });
 
   if (!response.ok) {
@@ -75,6 +76,12 @@ async function ocrWithGoogleVision(image, apiKey) {
     throw new Error(`Google Vision: ${result.error.message}`);
   }
   return (result && result.fullTextAnnotation && result.fullTextAnnotation.text) || '';
+}
+
+async function extractPdfText(base64Pdf) {
+  const buffer = Buffer.from(base64Pdf, 'base64');
+  const data = await pdfParse(buffer);
+  return (data && data.text) || '';
 }
 
 async function structureWithClaude(ocrText, apiKey) {
@@ -96,6 +103,7 @@ async function structureWithClaude(ocrText, apiKey) {
         },
       ],
     }),
+    signal: AbortSignal.timeout(20_000),
   });
 
   if (!response.ok) {
@@ -214,6 +222,7 @@ function structureWithHeuristics(ocrText) {
 }
 
 module.exports = async (req, res) => {
+  try {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Método no permitido' });
@@ -236,6 +245,31 @@ module.exports = async (req, res) => {
     return res.status(413).json({ error: 'La imagen es demasiado grande. Reduce la resolución e inténtalo de nuevo.' });
   }
 
+  // --- Rama PDF: extracción local de texto, sin Vision API ---
+  if (mimeType === 'application/pdf' || mimeType === 'application/x-pdf') {
+    let pdfText;
+    try {
+      pdfText = await extractPdfText(image);
+    } catch (err) {
+      console.error('Error extrayendo texto del PDF:', err.message);
+      return res.status(502).json({ error: 'No se pudo leer el PDF. Comprueba que el archivo no está dañado ni protegido con contraseña.' });
+    }
+
+    // PDF sin capa de texto (escaneo guardado como PDF sin OCR)
+    if (pdfText.replace(/\s/g, '').length < 50) {
+      return res.status(200).json({
+        no_text: true,
+        extracted: { merchant: null, amount: null, currency: 'EUR', date: null, category: 'other', description: null, confidence: 'low' },
+        structured_by: 'none',
+      });
+    }
+
+    const extracted = structureWithHeuristics(pdfText);
+    extracted.confidence = 'medium'; // texto de PDF es más fiable que OCR sobre foto
+    return res.status(200).json({ extracted, structured_by: 'pdf_heuristics', ocr_text: pdfText });
+  }
+
+  // --- Rama imagen: OCR con Google Vision + estructuración opcional con Claude ---
   let ocrText;
   try {
     ocrText = await ocrWithGoogleVision(image, googleApiKey);
@@ -266,6 +300,12 @@ module.exports = async (req, res) => {
   }
 
   res.status(200).json({ extracted, structured_by: structuredBy, ocr_text: ocrText });
+  } catch (err) {
+    console.error('[analyze] Error no capturado:', err.message, err.stack);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Error interno analizando el ticket. Inténtalo de nuevo.' });
+    }
+  }
 };
 
 // Expuesto solo para pruebas unitarias del parser de respaldo (scripts/test_heuristics.js).
