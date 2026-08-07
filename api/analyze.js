@@ -78,10 +78,20 @@ async function ocrWithGoogleVision(image, apiKey) {
 }
 
 async function extractPdfText(base64Pdf) {
-  const pdfParse = require('pdf-parse/lib/pdf-parse.js');
-  const buffer = Buffer.from(base64Pdf, 'base64');
-  const data = await pdfParse(buffer);
-  return (data && data.text) || '';
+  // Extrae texto de un PDF usando un enfoque de fallback basico.
+  // Intenta cargar pdf-parse si esta disponible; si no, lee el texto plano embebido en el PDF.
+  try {
+    const pdfParse = require('pdf-parse/lib/pdf-parse.js');
+    const buffer = Buffer.from(base64Pdf, 'base64');
+    const data = await pdfParse(buffer);
+    return (data && data.text) || '';
+  } catch (e) {
+    // Fallback: muchos PDFs tienen texto plano embebido entre operadores BT/ET.
+    // Esto captura texto basico sin necesitar una libreria externa.
+    const raw = Buffer.from(base64Pdf, 'base64').toString('latin1');
+    const matches = raw.match(/\(([^\)]{1,200})\)/g) || [];
+    return matches.map((m) => m.slice(1, -1)).join(' ');
+  }
 }
 
 async function structureWithClaude(ocrText, apiKey) {
