@@ -346,6 +346,33 @@ a.odoo-link {
 
 input[type="file"] { display: none; }
 
+.pdf-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 80px;
+  padding: 16px;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 12px;
+  text-align: center;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.no-text-warning {
+  background: #fdf2dd;
+  color: #8a6200;
+  border: 1.5px solid #f5d98a;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  margin-top: -8px;
+  margin-bottom: 16px;
+}
+
 .error-text {
   color: var(--red);
   font-size: 13px;

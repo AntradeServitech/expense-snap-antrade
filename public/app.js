@@ -16,10 +16,14 @@
     captureEmptyState: document.getElementById('captureEmptyState'),
     capturePreviewWrap: document.getElementById('capturePreviewWrap'),
     capturePreviewImg: document.getElementById('capturePreviewImg'),
+    capturePdfPlaceholder: document.getElementById('capturePdfPlaceholder'),
+    capturePdfName: document.getElementById('capturePdfName'),
     btnTakePhoto: document.getElementById('btnTakePhoto'),
     btnUploadImage: document.getElementById('btnUploadImage'),
+    btnUploadPdf: document.getElementById('btnUploadPdf'),
     inputCamera: document.getElementById('inputCamera'),
     inputGallery: document.getElementById('inputGallery'),
+    inputPdf: document.getElementById('inputPdf'),
     selectProject: document.getElementById('selectProject'),
     btnAnalyze: document.getElementById('btnAnalyze'),
     captureError: document.getElementById('captureError'),
@@ -27,8 +31,10 @@
     pendingList: document.getElementById('pendingList'),
 
     reviewPreviewImg: document.getElementById('reviewPreviewImg'),
+    reviewPdfPlaceholder: document.getElementById('reviewPdfPlaceholder'),
     confidenceBadge: document.getElementById('confidenceBadge'),
     confidenceWarning: document.getElementById('confidenceWarning'),
+    noTextWarning: document.getElementById('noTextWarning'),
     fieldMerchant: document.getElementById('fieldMerchant'),
     fieldAmount: document.getElementById('fieldAmount'),
     fieldCurrency: document.getElementById('fieldCurrency'),
@@ -51,8 +57,9 @@
 
   let state = {
     projects: [],
-    imageBase64: null, // sin prefijo data:
+    imageBase64: null, // sin prefijo data: (imagen o PDF)
     mimeType: 'image/jpeg',
+    isPdf: false,
     extracted: null,
   };
 
@@ -153,7 +160,10 @@
       const { dataUrl, base64, mimeType } = await resizeAndEncode(file);
       state.imageBase64 = base64;
       state.mimeType = mimeType;
+      state.isPdf = false;
       els.capturePreviewImg.src = dataUrl;
+      els.capturePreviewImg.classList.remove('hidden');
+      els.capturePdfPlaceholder.classList.add('hidden');
       els.capturePreviewWrap.classList.remove('hidden');
       els.captureEmptyState.classList.add('hidden');
       els.btnAnalyze.disabled = false;
@@ -163,16 +173,43 @@
     }
   }
 
+  async function handlePdfSelected(file) {
+    if (!file) return;
+    setError(els.captureError, null);
+    try {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      state.imageBase64 = base64;
+      state.mimeType = 'application/pdf';
+      state.isPdf = true;
+      els.capturePdfName.textContent = file.name;
+      els.capturePreviewImg.classList.add('hidden');
+      els.capturePdfPlaceholder.classList.remove('hidden');
+      els.capturePreviewWrap.classList.remove('hidden');
+      els.captureEmptyState.classList.add('hidden');
+      els.btnAnalyze.disabled = false;
+    } catch (err) {
+      console.error(err);
+      setError(els.captureError, 'No se pudo leer el archivo PDF. Inténtalo de nuevo.');
+    }
+  }
+
   els.btnTakePhoto.addEventListener('click', () => els.inputCamera.click());
   els.btnUploadImage.addEventListener('click', () => els.inputGallery.click());
+  els.btnUploadPdf.addEventListener('click', () => els.inputPdf.click());
   els.inputCamera.addEventListener('change', (e) => handleFileSelected(e.target.files[0]));
   els.inputGallery.addEventListener('change', (e) => handleFileSelected(e.target.files[0]));
+  els.inputPdf.addEventListener('change', (e) => handlePdfSelected(e.target.files[0]));
 
   // ---------- Analizar ticket (OCR + estructuración) ----------
   els.btnAnalyze.addEventListener('click', async () => {
     if (!state.imageBase64) return;
     setError(els.captureError, null);
-    showLoading('Analizando ticket…');
+    showLoading(state.isPdf ? 'Extrayendo texto del PDF…' : 'Analizando ticket…');
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -183,7 +220,7 @@
       if (!res.ok) throw new Error(data.error || 'Error al analizar el ticket');
 
       state.extracted = data.extracted;
-      populateReviewScreen(data.extracted);
+      populateReviewScreen(data.extracted, data.no_text);
       showScreen('review');
     } catch (err) {
       console.error(err);
@@ -193,8 +230,16 @@
     }
   });
 
-  function populateReviewScreen(extracted) {
-    els.reviewPreviewImg.src = els.capturePreviewImg.src;
+  function populateReviewScreen(extracted, noText = false) {
+    if (state.isPdf) {
+      els.reviewPreviewImg.classList.add('hidden');
+      els.reviewPdfPlaceholder.classList.remove('hidden');
+    } else {
+      els.reviewPreviewImg.src = els.capturePreviewImg.src;
+      els.reviewPreviewImg.classList.remove('hidden');
+      els.reviewPdfPlaceholder.classList.add('hidden');
+    }
+
     els.fieldMerchant.value = extracted.merchant || '';
     els.fieldAmount.value = extracted.amount != null ? extracted.amount : '';
     els.fieldCurrency.value = extracted.currency && [...els.fieldCurrency.options].some(o => o.value === extracted.currency)
@@ -209,7 +254,9 @@
     els.confidenceBadge.className = `confidence-badge confidence-${confidence}`;
     const labels = { high: '✓ Confianza alta', medium: '⚠ Confianza media', low: '⚠ Confianza baja' };
     els.confidenceBadge.textContent = labels[confidence] || labels.low;
-    els.confidenceWarning.classList.toggle('hidden', confidence !== 'low');
+    // noTextWarning es más específico que confidenceWarning — se muestran mutuamente excluyentes
+    els.confidenceWarning.classList.toggle('hidden', confidence !== 'low' || noText);
+    els.noTextWarning.classList.toggle('hidden', !noText);
   }
 
   els.btnBackToCapture.addEventListener('click', () => {
@@ -304,13 +351,18 @@
 
   function resetToCapture() {
     state.imageBase64 = null;
+    state.isPdf = false;
     state.extracted = null;
     els.capturePreviewWrap.classList.add('hidden');
     els.capturePreviewImg.src = '';
+    els.capturePreviewImg.classList.remove('hidden');
+    els.capturePdfPlaceholder.classList.add('hidden');
     els.captureEmptyState.classList.remove('hidden');
     els.btnAnalyze.disabled = true;
     els.inputCamera.value = '';
     els.inputGallery.value = '';
+    els.inputPdf.value = '';
+    els.noTextWarning.classList.add('hidden');
     setError(els.captureError, null);
     renderPendingQueue();
     showScreen('capture');

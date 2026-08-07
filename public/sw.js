@@ -1,4 +1,4 @@
-const CACHE_NAME = 'expense-snap-v1';
+const CACHE_NAME = 'expense-snap-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

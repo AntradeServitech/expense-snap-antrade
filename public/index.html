@@ -35,6 +35,15 @@
 
         <div id="capturePreviewWrap" class="preview-wrap hidden">
           <img id="capturePreviewImg" alt="Vista previa del ticket" />
+          <div id="capturePdfPlaceholder" class="pdf-placeholder hidden">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+            <span id="capturePdfName"></span>
+          </div>
         </div>
 
         <button id="btnTakePhoto" class="btn btn-primary btn-huge">
@@ -54,8 +63,18 @@
           </svg>
           Subir imagen
         </button>
+        <button id="btnUploadPdf" class="btn btn-secondary">
+          <svg class="btn-icon-inline" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          Subir PDF
+        </button>
         <input type="file" id="inputCamera" accept="image/*" capture="environment" />
         <input type="file" id="inputGallery" accept="image/*" />
+        <input type="file" id="inputPdf" accept=".pdf,application/pdf" />
 
         <div class="field field-spaced">
           <label for="selectProject">Proyecto</label>
@@ -78,11 +97,23 @@
     <section id="screen-review" class="screen">
       <div class="preview-wrap small">
         <img id="reviewPreviewImg" alt="Vista previa del ticket" />
+        <div id="reviewPdfPlaceholder" class="pdf-placeholder hidden">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <span>Documento PDF</span>
+        </div>
       </div>
 
       <div id="confidenceBadge" class="confidence-badge">Confianza: —</div>
       <p id="confidenceWarning" class="confidence-low-warning hidden">
         ⚠ Datos extraídos automáticamente. Revísalos cuidadosamente antes de confirmar.
+      </p>
+      <p id="noTextWarning" class="no-text-warning hidden">
+        Este PDF no tiene texto extraíble (puede ser un escaneo sin OCR). Rellena los campos manualmente.
       </p>
 
       <div class="card">
