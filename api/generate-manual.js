@@ -31,6 +31,9 @@ const GRAY_LT = rgb(0.85, 0.85,  0.85);
 const BLACK   = rgb(0,    0,     0);
 const WHITE   = rgb(1,    1,     1);
 
+// Productos representantes de cada familia (product.template ids en Odoo)
+const FAMILY_REPS = { '800A': 56, '802': 115, '803B': 116 };
+
 const LABELS = {
   es: {
     title:    'MANUAL DE MONTAJE',
@@ -83,11 +86,23 @@ module.exports = async (req, res) => {
       });
     }
 
+    // Fast path: todos los productos son de una sola familia -> copia server-side
+    if (situation.familyResIds.size === 1) {
+      const attName = await fastPathCopy(order_id, situation);
+      return res.status(200).json({
+        success: true,
+        fast_path: true,
+        attachment: attName,
+        sin_manual: situation.sinManual,
+      });
+    }
+
     const pdfBytes = await buildManualPdf(situation);
     const attName = await uploadToOdoo(order_id, pdfBytes, situation.opportunityId);
 
     return res.status(200).json({
       success: true,
+      fast_path: false,
       attachment: attName,
       sin_manual: situation.sinManual,
     });
@@ -141,142 +156,163 @@ async function locateManuals(orderId) {
   );
   const tmplIds = [...new Set(prods.map(p => p.product_tmpl_id[0]))];
 
-  // 5. product.template -> name, default_code, categ_id
+  // 5. product.template -> name, default_code, x_familia
   const tmpls = await odoo.searchRead(
     'product.template',
     [['id', 'in', tmplIds]],
-    ['id', 'name', 'default_code', 'categ_id'],
+    ['id', 'name', 'default_code', 'x_familia'],
   );
   const tmplById = Object.fromEntries(tmpls.map(t => [t.id, t]));
 
-  // --- PASO A: manual fusionado propio de cada producto ---
-  const manualsByTmpl = {};
-  const ownManuals = await odoo.searchRead(
-    'ir.attachment',
-    [
-      ['res_model', '=', 'product.template'],
-      ['res_id', 'in', tmplIds],
-      ['name', 'like', 'MANUAL_FAMILIA_%'],
-      ['mimetype', '=', 'application/pdf'],
-    ],
-    ['id', 'name', 'res_id'],
-  );
-  for (const att of ownManuals) {
-    if (!manualsByTmpl[att.res_id]) manualsByTmpl[att.res_id] = [];
-    manualsByTmpl[att.res_id].push(att);
-  }
-
-  // --- PASO B: para los productos sin manual propio, buscar en hermanos
-  // de la misma categoria (cubre al producto representativo de la familia) ---
-  const missingTmplIds = tmplIds.filter(tid => !manualsByTmpl[tid] || !manualsByTmpl[tid].length);
-
-  // PASO B.0: antes de buscar en Odoo, reusar el manual de otro producto del
-  // MISMO pedido que comparta categoria. Ejemplo: BVTE3284AE (sin manual propio)
-  // y BVTE3281C (con manual 800A) estan en la misma categ -> se reutiliza el
-  // manual ya resuelto en PASO A, sin necesidad de buscar hermanos externos.
-  // Esto evita que product.template._order='name' provoque una asignacion de
-  // familia incorrecta (el primer hermano por orden alfabetico puede ser de
-  // otra familia) y mantiene el fast path cuando todos los productos del
-  // pedido son de la misma familia.
-  for (const tid of missingTmplIds) {
+  // Agrupar productos por familia usando el campo x_familia
+  const tmplsByFamilia = {};
+  const sinManual = [];
+  for (const tid of tmplIds) {
     const tmpl = tmplById[tid];
-    if (!tmpl || !tmpl.categ_id) continue;
-    const cid = Array.isArray(tmpl.categ_id) ? tmpl.categ_id[0] : tmpl.categ_id;
-    const inOrderMatch = tmplIds.find(other =>
-      other !== tid &&
-      manualsByTmpl[other] && manualsByTmpl[other].length &&
-      tmplById[other] &&
-      (Array.isArray(tmplById[other].categ_id) ? tmplById[other].categ_id[0] : tmplById[other].categ_id) === cid,
-    );
-    if (inOrderMatch) {
-      manualsByTmpl[tid] = manualsByTmpl[inOrderMatch];
+    const familia = tmpl && tmpl.x_familia;
+    if (familia && FAMILY_REPS[familia]) {
+      if (!tmplsByFamilia[familia]) tmplsByFamilia[familia] = [];
+      tmplsByFamilia[familia].push(tid);
+    } else {
+      sinManual.push(tmpl ? (tmpl.default_code || tmpl.name) : `id_${tid}`);
     }
   }
 
-  const stillMissingTmplIds = tmplIds.filter(tid => !manualsByTmpl[tid] || !manualsByTmpl[tid].length);
-  if (stillMissingTmplIds.length) {
-    const categIds = [...new Set(
-      stillMissingTmplIds
-        .map(tid => tmplById[tid] && tmplById[tid].categ_id)
-        .filter(Boolean)
-        .map(c => (Array.isArray(c) ? c[0] : c)),
-    )];
+  // Para cada familia unica, cargar los adjuntos MANUAL_FAMILIA_% del representante
+  const uniqueFamilias = Object.keys(tmplsByFamilia);
+  const manualsByTmpl = {};
+  const usedAttsById = {};
+  const familyResIds = new Set();
 
-    if (categIds.length) {
-      const siblings = await odoo.searchRead(
-        'product.template',
-        [['categ_id', 'in', categIds]],
-        ['id', 'categ_id'],
-      );
-      const siblingIdsByCateg = {};
-      for (const s of siblings) {
-        const cid = Array.isArray(s.categ_id) ? s.categ_id[0] : s.categ_id;
-        if (!siblingIdsByCateg[cid]) siblingIdsByCateg[cid] = [];
-        siblingIdsByCateg[cid].push(s.id);
-      }
+  if (uniqueFamilias.length) {
+    const repIds = uniqueFamilias.map(f => FAMILY_REPS[f]);
+    const repManuals = await odoo.searchRead(
+      'ir.attachment',
+      [
+        ['res_model', '=', 'product.template'],
+        ['res_id', 'in', repIds],
+        ['name', 'like', 'MANUAL_FAMILIA_%'],
+        ['mimetype', '=', 'application/pdf'],
+      ],
+      ['id', 'name', 'res_id'],
+    );
 
-      const allSiblingIds = [...new Set(siblings.map(s => s.id))];
-      const siblingManuals = allSiblingIds.length
-        ? await odoo.searchRead(
-            'ir.attachment',
-            [
-              ['res_model', '=', 'product.template'],
-              ['res_id', 'in', allSiblingIds],
-              ['name', 'like', 'MANUAL_FAMILIA_%'],
-              ['mimetype', '=', 'application/pdf'],
-            ],
-            ['id', 'name', 'res_id'],
-          )
-        : [];
-      const manualsBySiblingId = {};
-      for (const att of siblingManuals) {
-        if (!manualsBySiblingId[att.res_id]) manualsBySiblingId[att.res_id] = [];
-        manualsBySiblingId[att.res_id].push(att);
-      }
+    const manualsByRepId = {};
+    for (const att of repManuals) {
+      if (!manualsByRepId[att.res_id]) manualsByRepId[att.res_id] = [];
+      manualsByRepId[att.res_id].push(att);
+    }
 
-      for (const tid of stillMissingTmplIds) {
-        const tmpl = tmplById[tid];
-        if (!tmpl || !tmpl.categ_id) continue;
-        const cid = Array.isArray(tmpl.categ_id) ? tmpl.categ_id[0] : tmpl.categ_id;
-        const candidateIds = (siblingIdsByCateg[cid] || []).filter(sid => sid !== tid);
-        for (const sid of candidateIds) {
-          if (manualsBySiblingId[sid] && manualsBySiblingId[sid].length) {
-            manualsByTmpl[tid] = manualsBySiblingId[sid];
-            break;
-          }
+    for (const familia of uniqueFamilias) {
+      const repId = FAMILY_REPS[familia];
+      const atts = manualsByRepId[repId] || [];
+      if (atts.length) {
+        familyResIds.add(repId);
+        for (const att of atts) usedAttsById[att.id] = att;
+        for (const tid of tmplsByFamilia[familia]) {
+          manualsByTmpl[tid] = atts;
+        }
+      } else {
+        for (const tid of tmplsByFamilia[familia]) {
+          const tmpl = tmplById[tid];
+          sinManual.push(tmpl ? (tmpl.default_code || tmpl.name) : `id_${tid}`);
         }
       }
     }
   }
 
-  // --- Productos sin manual tras los dos pasos ---
-  const sinManual = [];
-  for (const tid of tmplIds) {
-    if (!manualsByTmpl[tid] || !manualsByTmpl[tid].length) {
-      const tmpl = tmplById[tid];
-      sinManual.push(tmpl ? (tmpl.default_code || tmpl.name) : `id_${tid}`);
-    }
-  }
-
   const tmplIdsWithManual = tmplIds.filter(tid => manualsByTmpl[tid] && manualsByTmpl[tid].length);
-
-  // Adjuntos unicos que se van a usar (deduplicados por id) y de cuantas
-  // familias distintas provienen (por res_id del product.template origen).
-  // Si todos vienen del mismo res_id -> 1 sola familia -> fast path.
-  const usedAttsById = {};
-  for (const tid of tmplIdsWithManual) {
-    for (const att of manualsByTmpl[tid]) {
-      usedAttsById[att.id] = att;
-    }
-  }
   const usedAtts = Object.values(usedAttsById);
-  const familyResIds = new Set(usedAtts.map(a => a.res_id));
 
   return {
     order, orderName, opportunityId, lang, L, partner: partners[0],
     tmplIds, tmplById, manualsByTmpl, tmplIdsWithManual, sinManual,
     usedAtts, familyResIds,
   };
+}
+
+// ---------------------------------------------------------------------------
+// fastPathCopy — copia server-side los adjuntos MANUAL_FAMILIA_% del
+// representante al sale.order (y al crm.lead si existe), sin transferir
+// binarios por la funcion serverless. Solo aplica cuando todos los productos
+// del pedido son de una sola familia (familyResIds.size === 1).
+// Nota: el archivo resultante es el manual de familia tal cual, sin portada.
+// ---------------------------------------------------------------------------
+async function fastPathCopy(orderId, situation) {
+  const { order, opportunityId, usedAtts } = situation;
+  const orderName = order.name;
+
+  const sortedAtts = [...usedAtts].sort((a, b) => a.name.localeCompare(b.name));
+
+  function getOutputName(att) {
+    if (sortedAtts.length === 1) return `Manual_Montaje_${orderName}.pdf`;
+    if (att.name.includes('_part1of2')) return `Manual_Montaje_${orderName}_part1of2.pdf`;
+    if (att.name.includes('_part2of2')) return `Manual_Montaje_${orderName}_part2of2.pdf`;
+    const idx = sortedAtts.indexOf(att);
+    return `Manual_Montaje_${orderName}_part${idx + 1}of${sortedAtts.length}.pdf`;
+  }
+
+  // Eliminar adjuntos anteriores del sale.order con el mismo patron
+  const existingSO = await odoo.searchRead(
+    'ir.attachment',
+    [
+      ['res_model', '=', 'sale.order'],
+      ['res_id', '=', orderId],
+      ['name', 'like', `Manual_Montaje_${orderName}%`],
+    ],
+    ['id'],
+  );
+  if (existingSO.length) {
+    await odoo.execute('ir.attachment', 'unlink', [existingSO.map(a => a.id)]);
+  }
+
+  const copiedSO = [];
+  for (const att of sortedAtts) {
+    const attName = getOutputName(att);
+    const result = await odoo.execute('ir.attachment', 'copy', [[att.id], {
+      name: attName,
+      res_model: 'sale.order',
+      res_id: orderId,
+    }]);
+    const newId = Array.isArray(result) ? result[0] : result;
+    copiedSO.push({ name: attName, attId: newId });
+    console.log(`[generate-manual] fast path: adjunto id=${newId} ("${attName}") copiado al sale.order`);
+  }
+
+  // Copiar tambien al crm.lead vinculado
+  if (opportunityId && opportunityId > 0) {
+    try {
+      const existingCRM = await odoo.searchRead(
+        'ir.attachment',
+        [
+          ['res_model', '=', 'crm.lead'],
+          ['res_id', '=', opportunityId],
+          ['name', 'like', `Manual_Montaje_${orderName}%`],
+        ],
+        ['id'],
+      );
+      if (existingCRM.length) {
+        await odoo.execute('ir.attachment', 'unlink', [existingCRM.map(a => a.id)]);
+      }
+      for (const att of sortedAtts) {
+        const attName = getOutputName(att);
+        const result = await odoo.execute('ir.attachment', 'copy', [[att.id], {
+          name: attName,
+          res_model: 'crm.lead',
+          res_id: opportunityId,
+        }]);
+        console.log(`[generate-manual] fast path: adjunto copiado a crm.lead id=${opportunityId} ("${attName}")`);
+      }
+    } catch (crmErr) {
+      console.warn(`[generate-manual] fast path: no se pudo copiar al crm.lead: ${crmErr.message}`);
+    }
+  }
+
+  for (const part of copiedSO) {
+    await addToDocuments(opportunityId, part.attId, part.name);
+  }
+
+  return copiedSO.length === 1 ? copiedSO[0].name : copiedSO.map(p => p.name).join(', ');
 }
 
 // ---------------------------------------------------------------------------
