@@ -3,8 +3,11 @@
   "outputDirectory": "public",
   "functions": {
     "api/analyze.js":              { "maxDuration": 30 },
+    "api/submit.js":               { "maxDuration": 30 },
+    "api/projects.js":             { "maxDuration": 30 },
     "api/generate-manual.js":      { "maxDuration": 120 },
     "api/generate-ficha.js":       { "maxDuration": 120 },
+    "api/data-sheet/prepare.js":   { "maxDuration": 30 },
     "api/data-sheet/send.js":      { "maxDuration": 30 },
     "api/data-sheet/[token].js":   { "maxDuration": 30 }
   },
