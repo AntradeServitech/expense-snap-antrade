@@ -48,4 +48,5 @@ async function sendMail({ to, bcc, subject, html, attachments }) {
   return info;
 }
 
+// v2
 module.exports = { sendMail };
