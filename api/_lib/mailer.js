@@ -36,17 +36,14 @@ function createTransport() {
  * sendMail({ to, subject, html, attachments? })
  * attachments: [{ filename, content (Buffer), contentType }]
  */
-async function sendMail({ to, subject, html, attachments }) {
+async function sendMail({ to, bcc, subject, html, attachments }) {
   const transport = createTransport();
   const from = process.env.SMTP_FROM || process.env.SMTP_USER;
 
-  const info = await transport.sendMail({
-    from,
-    to,
-    subject,
-    html,
-    attachments: attachments || [],
-  });
+  const mailOpts = { from, to, subject, html, attachments: attachments || [] };
+  if (bcc) mailOpts.bcc = bcc;
+
+  const info = await transport.sendMail(mailOpts);
 
   return info;
 }

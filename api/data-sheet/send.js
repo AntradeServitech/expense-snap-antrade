@@ -1,18 +1,8 @@
 /**
  * POST /api/data-sheet/send
- * Called by Odoo webhook (state='webhook') when user clicks "Enviar al cliente"
- * on a x_transfluid_data_sheet record.
- *
- * Payload from Odoo: { id: <sheet_id>, ... }
- * Secret: ?secret=<DATA_SHEET_SECRET>
- *
- * Actions:
- *   1. Validate secret
- *   2. Read sheet -> project -> lead -> partner email
- *   3. Generate HMAC token (7-day TTL, single-use)
- *   4. Store token hash + expiry + sent_to in Odoo
- *   5. Send email to client via corporate SMTP (Nodemailer)
- *   6. Return { ok: true }
+ * Paso 2: lee el link ya generado (prepare.js paso 1) y envia el email al cliente.
+ * El operador puede modificar x_portal_sent_to en Odoo antes de ejecutar este paso.
+ * Envia BCC a SMTP_USER para que quede copia en el buzón del remitente.
  */
 
 'use strict';
@@ -22,32 +12,15 @@ const { execute, searchRead } = require('../_lib/odoo.js');
 const { sendMail } = require('../_lib/mailer.js');
 
 const SHEET_MODEL = 'x_transfluid_data_sheet';
-const BASE_URL = 'https://antrade-expensesnap.vercel.app';
-const TOKEN_TTL_SECONDS = 7 * 24 * 3600;
 
 function timingSafeEqual(a, b) {
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-function generateToken(sheetId, secret) {
-  const exp = Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
-  const payload = Buffer.from(JSON.stringify({ id: sheetId, exp })).toString('base64url');
-  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  return { token: `${payload}.${sig}`, sig, exp };
-}
-
-function odooDatetime(unixSec) {
-  return new Date(unixSec * 1000).toISOString().replace('T', ' ').substring(0, 19);
-}
-
 module.exports = async (req, res) => {
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   const DS_SECRET = process.env.DATA_SHEET_SECRET;
   if (!DS_SECRET) {
@@ -61,86 +34,62 @@ module.exports = async (req, res) => {
   }
 
   let body = req.body;
-  if (typeof body === 'string') {
-    try { body = JSON.parse(body); } catch (_) { body = {}; }
-  }
+  if (typeof body === 'string') { try { body = JSON.parse(body); } catch (_) { body = {}; } }
   body = body || {};
 
   const sheetId = Number(body.id);
-  if (!sheetId) {
-    return res.status(400).json({ error: 'Missing id in webhook payload' });
-  }
+  if (!sheetId) return res.status(400).json({ error: 'Missing id in webhook payload' });
 
   try {
-    // 1. Read the data sheet
     const sheets = await searchRead(SHEET_MODEL, [['id', '=', sheetId]],
-      ['x_project_id', 'x_portal_submitted', 'x_state']);
-    if (!sheets.length) {
-      return res.status(404).json({ error: 'Data sheet not found', id: sheetId });
-    }
+      ['x_project_id', 'x_portal_submitted', 'x_portal_token_hash',
+       'x_portal_url', 'x_portal_sent_to', 'x_portal_expires_at']);
+    if (!sheets.length) return res.status(404).json({ error: 'Data sheet not found', id: sheetId });
     const sheet = sheets[0];
 
     if (sheet.x_portal_submitted) {
       return res.status(409).json({ error: 'Client already submitted this form' });
     }
-
-    // 2. Read project
-    const projectField = sheet.x_project_id;
-    const projectId = Array.isArray(projectField) ? projectField[0] : projectField;
-    if (!projectId) {
-      return res.status(400).json({ error: 'Data sheet has no project assigned' });
+    if (!sheet.x_portal_token_hash || !sheet.x_portal_url) {
+      return res.status(400).json({
+        error: 'Link no generado. Ejecuta primero "Generar link de datos" en el menu de Acciones.',
+      });
     }
 
-    const projects = await searchRead('project.project', [['id', '=', projectId]],
-      ['name', 'x_lead_id', 'x_serial_antrade']);
-    if (!projects.length) {
-      return res.status(404).json({ error: 'Project not found', projectId });
+    const recipientEmail = sheet.x_portal_sent_to;
+    if (!recipientEmail) {
+      return res.status(400).json({ error: 'Sin destinatario. Rellena el campo "Link enviado a" en la ficha.' });
     }
-    const project = projects[0];
-    const serialRef = project.x_serial_antrade || project.name || `Proyecto ${projectId}`;
 
-    // 3. Read lead -> partner email
-    let partnerEmail = null;
+    // Project name for subject/body
+    let serialRef = 'Proyecto';
     let partnerName = null;
-
-    if (project.x_lead_id) {
-      const leadId = Array.isArray(project.x_lead_id) ? project.x_lead_id[0] : project.x_lead_id;
-      const leads = await searchRead('crm.lead', [['id', '=', leadId]], ['partner_id']);
-      if (leads.length && leads[0].partner_id) {
-        const pId = Array.isArray(leads[0].partner_id) ? leads[0].partner_id[0] : leads[0].partner_id;
-        const partners = await searchRead('res.partner', [['id', '=', pId]], ['email', 'name']);
-        if (partners.length) {
-          partnerEmail = partners[0].email || null;
-          partnerName = partners[0].name || null;
+    const pf = sheet.x_project_id;
+    const pId = Array.isArray(pf) ? pf[0] : pf;
+    if (pId) {
+      const projs = await searchRead('project.project', [['id', '=', pId]], ['name', 'x_serial_antrade', 'x_lead_id']);
+      if (projs.length) {
+        serialRef = projs[0].x_serial_antrade || projs[0].name;
+        if (projs[0].x_lead_id) {
+          const leadId = Array.isArray(projs[0].x_lead_id) ? projs[0].x_lead_id[0] : projs[0].x_lead_id;
+          const leads = await searchRead('crm.lead', [['id', '=', leadId]], ['partner_id']);
+          if (leads.length && leads[0].partner_id) {
+            const partnerId = Array.isArray(leads[0].partner_id) ? leads[0].partner_id[0] : leads[0].partner_id;
+            const partners = await searchRead('res.partner', [['id', '=', partnerId]], ['name']);
+            if (partners.length) partnerName = partners[0].name || null;
+          }
         }
       }
     }
 
-    if (!partnerEmail) {
-      return res.status(400).json({
-        error: 'No client email found. Check that the lead has a partner_id with email.',
-        projectId,
-      });
+    const portalUrl = sheet.x_portal_url;
+    const expiresAtRaw = sheet.x_portal_expires_at;
+    let expiresHuman = '';
+    if (expiresAtRaw) {
+      const d = new Date(expiresAtRaw.replace(' ', 'T') + 'Z');
+      expiresHuman = d.toLocaleDateString('es-ES', { day: '2-digit', month: 'long', year: 'numeric' });
     }
 
-    // 4. Generate token
-    const { token, sig, exp } = generateToken(sheetId, DS_SECRET);
-    const portalUrl = `${BASE_URL}/api/data-sheet/${token}`;
-    const expiresAt = odooDatetime(exp);
-
-    // 5. Store in Odoo
-    await execute(SHEET_MODEL, 'write', [[sheetId], {
-      x_portal_token_hash: sig,
-      x_portal_expires_at: expiresAt,
-      x_portal_sent_to: partnerEmail,
-      x_portal_submitted: false,
-      x_state: 'in_progress',
-    }]);
-
-    // 6. Send email to client via corporate SMTP
-    const expiresHuman = new Date(exp * 1000).toLocaleDateString('es-ES', {
-      day: '2-digit', month: 'long', year: 'numeric',
-    });
     const salutation = partnerName ? `Estimado/a ${partnerName},` : 'Estimado cliente,';
 
     const emailHtml = `<p>${salutation}</p>
@@ -154,26 +103,32 @@ module.exports = async (req, res) => {
 </p>
 <p>O copie esta URL en su navegador:<br>
 <small style="color:#555">${portalUrl}</small></p>
-<p>Este enlace es personal y de un solo uso. Expira el <strong>${expiresHuman}</strong>.</p>
+${expiresHuman ? `<p>Este enlace es personal y de un solo uso. Expira el <strong>${expiresHuman}</strong>.</p>` : ''}
 <p>Si tiene alguna duda, contacte con su interlocutor en Antrade Servitech.</p>
 <p>Saludos,<br>
 <strong>Antrade Servitech SL</strong></p>`;
 
+    // BCC al remitente para que quede copia en el buzón
+    const senderCopy = process.env.SMTP_USER;
+
     try {
       await sendMail({
-        to: partnerEmail,
+        to: recipientEmail,
+        bcc: senderCopy,
         subject: `Datos Tecnicos Transfluid - Proyecto ${serialRef}`,
         html: emailHtml,
       });
+      console.log(`[send.js] Email enviado a ${recipientEmail} (BCC: ${senderCopy}) para ficha ${sheetId}`);
     } catch (mailErr) {
-      // Log but don't fail — token was already stored in Odoo
       console.error('[send.js] SMTP error:', mailErr.message);
+      // No falla el endpoint: el token ya existe, el operador puede reintentar
+      return res.status(500).json({ error: `SMTP error: ${mailErr.message}` });
     }
 
     return res.status(200).json({
       ok: true,
-      sent_to: partnerEmail,
-      expires_at: expiresAt,
+      sent_to: recipientEmail,
+      bcc: senderCopy,
       project: serialRef,
     });
 
