@@ -2,9 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "public",
   "functions": {
-    "api/analyze.js":         { "maxDuration": 30 },
-    "api/generate-manual.js": { "maxDuration": 120 },
-    "api/generate-ficha.js":  { "maxDuration": 120 }
+    "api/analyze.js":              { "maxDuration": 30 },
+    "api/generate-manual.js":      { "maxDuration": 120 },
+    "api/generate-ficha.js":       { "maxDuration": 120 },
+    "api/data-sheet/send.js":      { "maxDuration": 30 },
+    "api/data-sheet/[token].js":   { "maxDuration": 30 }
   },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" }
