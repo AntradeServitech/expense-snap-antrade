@@ -11,7 +11,7 @@
  *   2. Read sheet -> project -> lead -> partner email
  *   3. Generate HMAC token (7-day TTL, single-use)
  *   4. Store token hash + expiry + sent_to in Odoo
- *   5. Send email to client via Odoo mail.mail
+ *   5. Send email to client via corporate SMTP (Nodemailer)
  *   6. Return { ok: true }
  */
 
@@ -19,6 +19,7 @@
 
 const crypto = require('crypto');
 const { execute, searchRead } = require('../_lib/odoo.js');
+const { sendMail } = require('../_lib/mailer.js');
 
 const SHEET_MODEL = 'x_transfluid_data_sheet';
 const BASE_URL = 'https://antrade-expensesnap.vercel.app';
@@ -136,7 +137,7 @@ module.exports = async (req, res) => {
       x_state: 'in_progress',
     }]);
 
-    // 6. Send email via Odoo mail.mail
+    // 6. Send email to client via corporate SMTP
     const expiresHuman = new Date(exp * 1000).toLocaleDateString('es-ES', {
       day: '2-digit', month: 'long', year: 'numeric',
     });
@@ -159,16 +160,14 @@ module.exports = async (req, res) => {
 <strong>Antrade Servitech SL</strong></p>`;
 
     try {
-      const mailId = await execute('mail.mail', 'create', [{
-        subject: `Datos Tecnicos Transfluid — Proyecto ${serialRef}`,
-        body_html: emailHtml,
-        email_to: partnerEmail,
-        auto_delete: true,
-      }]);
-      await execute('mail.mail', 'send', [[mailId]]);
+      await sendMail({
+        to: partnerEmail,
+        subject: `Datos Tecnicos Transfluid - Proyecto ${serialRef}`,
+        html: emailHtml,
+      });
     } catch (mailErr) {
-      // Log but don't fail — token was already stored
-      console.error('[send.js] mail.mail.send error:', mailErr.message);
+      // Log but don't fail — token was already stored in Odoo
+      console.error('[send.js] SMTP error:', mailErr.message);
     }
 
     return res.status(200).json({

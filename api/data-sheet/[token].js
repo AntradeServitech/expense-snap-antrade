@@ -11,6 +11,7 @@
 const crypto = require('crypto');
 const { PDFDocument, StandardFonts, rgb, PageSizes } = require('pdf-lib');
 const { execute, searchRead } = require('../_lib/odoo.js');
+const { sendMail } = require('../_lib/mailer.js');
 
 const SHEET_MODEL = 'x_transfluid_data_sheet';
 
@@ -696,26 +697,18 @@ de la ficha en Odoo (Proyecto > Ficha TF) a "Completado" si todo es correcto.</p
 <p>Saludos,<br>Sistema Antrade ERP</p>`;
 
       try {
-        const mailId = await execute('mail.mail', 'create', [{
-          subject: `[FICHA TF] ${serialRef} — Datos recibidos del cliente`,
-          body_html: emailHtml,
-          email_to: notifyEmail,
-          auto_delete: true,
-          attachment_ids: [],
-        }]);
-        // Attach PDF to the mail
-        const mailAttId = await execute('ir.attachment', 'create', [{
-          name: pdfName,
-          type: 'binary',
-          datas: pdfB64,
-          res_model: 'mail.mail',
-          res_id: mailId,
-          mimetype: 'application/pdf',
-        }]);
-        await execute('mail.mail', 'write', [[mailId], { attachment_ids: [(4, mailAttId, 0)] }]);
-        await execute('mail.mail', 'send', [[mailId]]);
+        await sendMail({
+          to: notifyEmail,
+          subject: `[FICHA TF] ${serialRef} - Datos recibidos del cliente`,
+          html: emailHtml,
+          attachments: [{
+            filename: pdfName,
+            content: Buffer.from(pdfBytes),
+            contentType: 'application/pdf',
+          }],
+        });
       } catch (mailErr) {
-        console.error('[token].js mail.mail.send error:', mailErr.message);
+        console.error('[token].js SMTP error:', mailErr.message);
       }
 
       return res.status(200).json({ ok: true });
