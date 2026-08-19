@@ -109,9 +109,12 @@ const SECTIONS = [
   },
 ];
 
-// Fields to read from Odoo (all non-binary value fields + all ori fields)
+// Fields to read from Odoo (all non-binary value fields + all ori fields + portal fields)
 function buildFieldList() {
-  const fields = ['id', 'x_project_id', 'x_portal_submitted', 'x_portal_expires_at', 'x_state'];
+  const fields = [
+    'id', 'x_project_id', 'x_portal_submitted', 'x_portal_expires_at',
+    'x_state', 'x_portal_first_viewed_at',
+  ];
   for (const sec of SECTIONS) {
     for (const f of sec.fields) {
       if (f.name) fields.push(f.name);   // value field (skips binary where name=null)
@@ -145,7 +148,7 @@ function verifyToken(token, secret) {
 // ---------------------------------------------------------------------------
 function toPdf(v) {
   if (v === null || v === undefined || v === false) return '';
-  return String(v).replace(/[^ -ÿ]/g, '?').trim();
+  return String(v).replace(/[^ -ÿ]/g, '?').trim();
 }
 
 async function buildPdf(sheet, projectName, submission) {
@@ -238,7 +241,6 @@ async function buildPdf(sheet, projectName, submission) {
       ensureSpace(LINE * 2);
 
       if (f.type === 'binary') {
-        // Binary: show what was sent (filename or note)
         const provided = submission.files && submission.files[f.fileName || f.ori];
         const val = provided ? `[Archivo adjunto: ${toPdf(provided)}]` : '[No enviado — remitir por email]';
         const ori = sheet[f.ori] || '';
@@ -246,7 +248,6 @@ async function buildPdf(sheet, projectName, submission) {
         drawLine(`${f.label} ${oriLabel}`, ML + 4, 8, true, rgb(0.3, 0.3, 0.3));
         drawLine(`  ${val}`, ML + 12, 8, false, ori === 'known' ? rgb(0.15, 0.45, 0.15) : rgb(0, 0, 0));
       } else {
-        // Text field: show Antrade value (if known/verify) and client value
         const odooVal  = f.name ? toPdf(sheet[f.name]) : '';
         const clientVal = f.name ? toPdf(submission.fields && submission.fields[f.name]) : '';
         const ori = sheet[f.ori] || '';
@@ -555,6 +556,15 @@ module.exports = async (req, res) => {
       }
       const sheet = sheets[0];
 
+      // Register first access (item 8) — write once, non-blocking
+      if (!sheet.x_portal_first_viewed_at) {
+        const viewedAt = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        try {
+          await execute(SHEET_MODEL, 'write', [[sheetId], { x_portal_first_viewed_at: viewedAt }]);
+          sheet.x_portal_first_viewed_at = viewedAt;
+        } catch (_) {}
+      }
+
       if (sheet.x_portal_submitted) {
         const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -597,7 +607,6 @@ contacte con Antrade Servitech.</p></div></body></html>`;
   // ---- POST: process submission ----
   if (req.method === 'POST') {
     try {
-      // Read sheet (check not submitted)
       const allFields = buildFieldList();
       const sheets = await searchRead(SHEET_MODEL, [['id', '=', sheetId]], allFields);
       if (!sheets.length) return res.status(404).json({ error: 'Sheet not found' });
@@ -636,7 +645,7 @@ contacte con Antrade Servitech.</p></div></body></html>`;
         }
       }
 
-      // Collect submitted file notes (text notes for binary fields)
+      // Collect submitted file notes
       const submittedFiles = {};
       for (const sec of SECTIONS) {
         for (const f of sec.fields) {
