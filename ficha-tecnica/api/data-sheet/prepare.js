@@ -57,7 +57,7 @@ module.exports = async (req, res) => {
 
   try {
     const sheets = await searchRead(SHEET_MODEL, [['id', '=', sheetId]],
-      ['x_project_id', 'x_portal_submitted', 'x_state', 'x_portal_token_hash']);
+      ['x_project_id', 'x_portal_submitted', 'x_state', 'x_portal_token_hash', 'x_client_email']);
     if (!sheets.length) return res.status(404).json({ error: 'Data sheet not found', id: sheetId });
     const sheet = sheets[0];
 
@@ -92,15 +92,21 @@ module.exports = async (req, res) => {
     const portalUrl = `${BASE_URL}/api/data-sheet/${token}`;
     const expiresAt = odooDatetime(exp);
 
-    // Write token + URL to Odoo (no email sent here)
-    await execute(SHEET_MODEL, 'write', [[sheetId], {
+    // Si x_client_email ya esta rellenado, respetar el valor que edito Jesus;
+    // si esta vacio, pre-rellenarlo con el email del partner del lead.
+    const writeVals = {
       x_portal_token_hash: sig,
       x_portal_expires_at: expiresAt,
       x_portal_sent_to: partnerEmail || '',
       x_portal_url: portalUrl,
       x_portal_submitted: false,
       x_state: 'in_progress',
-    }]);
+    };
+    if (!sheet.x_client_email && partnerEmail) {
+      writeVals.x_client_email = partnerEmail;
+    }
+    // Write token + URL to Odoo (no email sent here)
+    await execute(SHEET_MODEL, 'write', [[sheetId], writeVals]);
 
     console.log(`[prepare.js] Link generado para ficha ${sheetId} (${serialRef}): ${portalUrl}`);
 

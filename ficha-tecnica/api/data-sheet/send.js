@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
   try {
     const sheets = await searchRead(SHEET_MODEL, [['id', '=', sheetId]],
       ['x_project_id', 'x_portal_submitted', 'x_portal_token_hash',
-       'x_portal_url', 'x_portal_sent_to', 'x_portal_expires_at']);
+       'x_portal_url', 'x_portal_sent_to', 'x_portal_expires_at', 'x_client_email']);
     if (!sheets.length) return res.status(404).json({ error: 'Data sheet not found', id: sheetId });
     const sheet = sheets[0];
 
@@ -55,9 +55,13 @@ module.exports = async (req, res) => {
       });
     }
 
-    const recipientEmail = sheet.x_portal_sent_to;
+    // Leer destinatario de x_client_email (campo editable por Jesus en la ficha).
+    // Si esta vacio: bloquear con error explicito — no inferir de x_portal_sent_to.
+    const recipientEmail = sheet.x_client_email;
     if (!recipientEmail) {
-      return res.status(400).json({ error: 'Sin destinatario. Rellena el campo "Link enviado a" en la ficha.' });
+      return res.status(400).json({
+        error: 'Sin destinatario. Rellena el campo "Email destinatario (cliente)" en la ficha antes de enviar.',
+      });
     }
 
     // Project name for subject/body
@@ -108,24 +112,54 @@ ${expiresHuman ? `<p>Este enlace es personal y de un solo uso. Expira el <strong
 <strong>Antrade Servitech SL</strong></p>`;
 
     // Enviar email al cliente via mail.mail de Odoo (sin SMTP en Vercel)
+    let clientMailStatus = null;
     try {
       const mailId = await execute('mail.mail', 'create', [{
         subject: `Datos Tecnicos Transfluid - Proyecto ${serialRef}`,
         body_html: emailHtml,
         email_to: recipientEmail,
-        auto_delete: true,
+        auto_delete: false,
       }]);
       await execute('mail.mail', 'send', [[mailId]]);
       console.log(`[send.js] mail.mail id=${mailId} enviado a ${recipientEmail} para ficha ${sheetId}`);
+      // Leer estado real para x_last_email_status
+      const nowStr = new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
+        day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      try {
+        const mailRecs = await execute('mail.mail', 'read', [[mailId]],
+          { fields: ['state', 'failure_reason'] });
+        if (mailRecs.length && mailRecs[0].state === 'exception') {
+          const reason = (mailRecs[0].failure_reason || 'desconocido').substring(0, 120);
+          clientMailStatus = 'Error envio cliente ' + nowStr + ': ' + reason;
+          console.error('[send.js] mail exception:', reason);
+          // Mantener el registro para depuracion — no hacer unlink
+        } else {
+          clientMailStatus = 'Enviado a ' + recipientEmail + ' ' + nowStr;
+          try { await execute('mail.mail', 'unlink', [[mailId]]); } catch (_) {}
+        }
+      } catch (_) {
+        // Registro desaparecio = enviado exitosamente
+        const nowStr2 = new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
+          day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        clientMailStatus = 'Enviado a ' + recipientEmail + ' ' + nowStr2;
+      }
     } catch (mailErr) {
       console.error('[send.js] mail.mail error:', mailErr.message);
       return res.status(500).json({ error: `Mail error: ${mailErr.message}` });
+    }
+
+    // Escribir estado del correo en la ficha (campo x_last_email_status)
+    if (clientMailStatus) {
+      try {
+        await execute(SHEET_MODEL, 'write', [[sheetId], { x_last_email_status: clientMailStatus }]);
+      } catch (_) {}
     }
 
     return res.status(200).json({
       ok: true,
       sent_to: recipientEmail,
       project: serialRef,
+      mail_status: clientMailStatus,
     });
 
   } catch (err) {

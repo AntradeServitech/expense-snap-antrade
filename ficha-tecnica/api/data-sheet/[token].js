@@ -695,6 +695,7 @@ contacte con Antrade Servitech.</p></div></body></html>`;
       // Aviso a Jesus via mail.mail de Odoo (sin SMTP en Vercel)
       // Nota: base.automation id=42 no dispara en modelos custom (bug Odoo SaaS on_write hook),
       // por lo que se envia directamente aqui.
+      let jesusMailStatus = null;
       try {
         const jesusBody = (
           '<p>El cliente ha completado la Ficha de Datos Tecnicos del proyecto ' +
@@ -707,12 +708,45 @@ contacte con Antrade Servitech.</p></div></body></html>`;
           subject: '[FICHA TF] ' + serialRef + ' - Datos recibidos del cliente',
           body_html: jesusBody,
           email_to: 'j.guzman@antradeservitech.com',
-          auto_delete: true,
+          auto_delete: false,
         }]);
         await execute('mail.mail', 'send', [[jesusMailId]]);
         console.log('[token].js aviso Jesus: mail.mail id=' + jesusMailId + ' para ' + serialRef);
+        // Leer estado real del correo para x_last_email_status
+        const nowStr = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit' });
+        try {
+          const mailRecs = await execute('mail.mail', 'read', [[jesusMailId]],
+            { fields: ['state', 'failure_reason'] });
+          if (mailRecs.length && mailRecs[0].state === 'exception') {
+            const reason = (mailRecs[0].failure_reason || 'desconocido').substring(0, 120);
+            jesusMailStatus = 'Error ' + nowStr + ': ' + reason;
+            console.error('[token].js aviso Jesus mail exception:', reason);
+          } else {
+            jesusMailStatus = 'Enviado ' + nowStr;
+            try { await execute('mail.mail', 'unlink', [[jesusMailId]]); } catch (_) {}
+          }
+        } catch (_) {
+          // Registro desaparecio = auto_delete tras envio exitoso
+          const nowStr2 = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit' });
+          jesusMailStatus = 'Enviado ' + nowStr2;
+        }
       } catch (mailErr) {
         console.error('[token].js aviso Jesus mail.mail error:', mailErr.message);
+        const nowErrStr = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
+          day: '2-digit', month: '2-digit', year: 'numeric',
+          hour: '2-digit', minute: '2-digit' });
+        jesusMailStatus = 'Error ' + nowErrStr + ': ' + mailErr.message.substring(0, 100);
+      }
+
+      // Escribir estado del correo en la ficha (campo x_last_email_status)
+      if (jesusMailStatus) {
+        try {
+          await execute(SHEET_MODEL, 'write', [[sheetId], { x_last_email_status: jesusMailStatus }]);
+        } catch (_) {}
       }
 
       return res.status(200).json({ ok: true });
