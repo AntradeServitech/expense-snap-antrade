@@ -9,7 +9,6 @@
 
 const crypto = require('crypto');
 const { execute, searchRead } = require('../_lib/odoo.js');
-const { sendMail } = require('../_lib/mailer.js');
 
 const SHEET_MODEL = 'x_transfluid_data_sheet';
 
@@ -108,27 +107,24 @@ ${expiresHuman ? `<p>Este enlace es personal y de un solo uso. Expira el <strong
 <p>Saludos,<br>
 <strong>Antrade Servitech SL</strong></p>`;
 
-    // BCC al remitente para que quede copia en el buzón
-    const senderCopy = process.env.SMTP_USER;
-
+    // Enviar email al cliente via mail.mail de Odoo (sin SMTP en Vercel)
     try {
-      await sendMail({
-        to: recipientEmail,
-        bcc: senderCopy,
+      const mailId = await execute('mail.mail', 'create', [{
         subject: `Datos Tecnicos Transfluid - Proyecto ${serialRef}`,
-        html: emailHtml,
-      });
-      console.log(`[send.js] Email enviado a ${recipientEmail} (BCC: ${senderCopy}) para ficha ${sheetId}`);
+        body_html: emailHtml,
+        email_to: recipientEmail,
+        auto_delete: true,
+      }]);
+      await execute('mail.mail', 'send', [[mailId]]);
+      console.log(`[send.js] mail.mail id=${mailId} enviado a ${recipientEmail} para ficha ${sheetId}`);
     } catch (mailErr) {
-      console.error('[send.js] SMTP error:', mailErr.message);
-      // No falla el endpoint: el token ya existe, el operador puede reintentar
-      return res.status(500).json({ error: `SMTP error: ${mailErr.message}` });
+      console.error('[send.js] mail.mail error:', mailErr.message);
+      return res.status(500).json({ error: `Mail error: ${mailErr.message}` });
     }
 
     return res.status(200).json({
       ok: true,
       sent_to: recipientEmail,
-      bcc: senderCopy,
       project: serialRef,
     });
 

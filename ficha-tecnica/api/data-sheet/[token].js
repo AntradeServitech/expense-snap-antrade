@@ -11,8 +11,6 @@
 const crypto = require('crypto');
 const { PDFDocument, StandardFonts, rgb, PageSizes } = require('pdf-lib');
 const { execute, searchRead } = require('../_lib/odoo.js');
-const { sendMail } = require('../_lib/mailer.js');
-
 const SHEET_MODEL = 'x_transfluid_data_sheet';
 
 // ---------------------------------------------------------------------------
@@ -694,31 +692,8 @@ contacte con Antrade Servitech.</p></div></body></html>`;
         console.error('[token].js ir.attachment.create error:', attErr.message);
       }
 
-      // Send email with PDF to Jesus
-      const notifyEmail = process.env.ODOO_USER || 'j.guzman@antradeservitech.com';
-      const emailHtml = `<p>El cliente ha completado la Ficha de Datos Tecnicos del proyecto
-<strong>${serialRef}</strong>.</p>
-<p><b>Declarado por:</b> ${declarant}<br>
-<b>Fecha:</b> ${submittedAt}<br>
-<b>IP:</b> ${ip}</p>
-<p>El PDF adjunto contiene los datos declarados. Por favor, reviselo y actualice el estado
-de la ficha en Odoo (Proyecto > Ficha TF) a "Completado" si todo es correcto.</p>
-<p>Saludos,<br>Sistema Antrade ERP</p>`;
-
-      try {
-        await sendMail({
-          to: notifyEmail,
-          subject: `[FICHA TF] ${serialRef} - Datos recibidos del cliente`,
-          html: emailHtml,
-          attachments: [{
-            filename: pdfName,
-            content: Buffer.from(pdfBytes),
-            contentType: 'application/pdf',
-          }],
-        });
-      } catch (mailErr) {
-        console.error('[token].js SMTP error:', mailErr.message);
-      }
+      // Email a Jesus: disparado por base.automation en Odoo cuando x_portal_submitted cambia a True
+      // (sin SMTP en Vercel — el correo usa el servidor de correo configurado en Odoo)
 
       return res.status(200).json({ ok: true });
 
