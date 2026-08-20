@@ -692,8 +692,28 @@ contacte con Antrade Servitech.</p></div></body></html>`;
         console.error('[token].js ir.attachment.create error:', attErr.message);
       }
 
-      // Email a Jesus: disparado por base.automation en Odoo cuando x_portal_submitted cambia a True
-      // (sin SMTP en Vercel — el correo usa el servidor de correo configurado en Odoo)
+      // Aviso a Jesus via mail.mail de Odoo (sin SMTP en Vercel)
+      // Nota: base.automation id=42 no dispara en modelos custom (bug Odoo SaaS on_write hook),
+      // por lo que se envia directamente aqui.
+      try {
+        const jesusBody = (
+          '<p>El cliente ha completado la Ficha de Datos Tecnicos del proyecto ' +
+          '<strong>' + serialRef + '</strong>.</p>' +
+          '<p>El PDF con los datos declarados esta adjunto en el registro de la ' +
+          'ficha en Odoo (Proyecto &gt; Ficha TF). Revisa los datos y actualiza el ' +
+          'estado a Completado si todo es correcto.</p>'
+        );
+        const jesusMailId = await execute('mail.mail', 'create', [{
+          subject: '[FICHA TF] ' + serialRef + ' - Datos recibidos del cliente',
+          body_html: jesusBody,
+          email_to: 'j.guzman@antradeservitech.com',
+          auto_delete: true,
+        }]);
+        await execute('mail.mail', 'send', [[jesusMailId]]);
+        console.log('[token].js aviso Jesus: mail.mail id=' + jesusMailId + ' para ' + serialRef);
+      } catch (mailErr) {
+        console.error('[token].js aviso Jesus mail.mail error:', mailErr.message);
+      }
 
       return res.status(200).json({ ok: true });
 
