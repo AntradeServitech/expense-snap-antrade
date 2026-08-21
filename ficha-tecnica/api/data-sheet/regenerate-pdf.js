@@ -23,7 +23,7 @@ const fs   = require('fs');
 const path = require('path');
 
 const LOGO_BYTES = (() => {
-  try { return fs.readFileSync(path.join(__dirname, '../../public/logo-antrade.png')); }
+  try { return fs.readFileSync(path.join(__dirname, 'logo-antrade.png')); }
   catch (_) { return null; }
 })();
 
