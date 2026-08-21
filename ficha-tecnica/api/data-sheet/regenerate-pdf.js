@@ -334,7 +334,7 @@ module.exports = async (req, res) => {
     // Clear error flag and update status
     const regenStatus = 'PDF regenerado ' + nowStr;
     await execute(SHEET_MODEL, 'write', [[sheetId], {
-      x_pdf_generation_error: false,
+      x_pdf_generation_error: '',
       x_last_email_status: regenStatus,
     }]);
 

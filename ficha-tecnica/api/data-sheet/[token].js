@@ -740,7 +740,7 @@ contacte con Antrade Servitech.</p></div></body></html>`;
       const odooWritePayload = {
         x_portal_submitted: true,
         x_state: 'client_review',
-        x_pdf_generation_error: false,  // clear any prior error
+        x_pdf_generation_error: '',  // clear any prior error (empty string, not boolean false)
       };
       for (const [fname, fval] of Object.entries(submittedFields)) {
         const fdef = FIELD_MAP[fname];
