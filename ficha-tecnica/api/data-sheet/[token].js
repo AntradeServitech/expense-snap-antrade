@@ -766,6 +766,7 @@ h1{color:#92400e;font-size:1.2rem;margin:0 0 8px}
         x_portal_submitted: true,
         x_state: 'client_review',
         x_pdf_generation_error: '',  // clear any prior error (empty string, not boolean false)
+        x_last_email_status: 'DBG body_keys=' + Object.keys(body).slice(0,10).join(',') + ' submittedFields_keys=' + Object.keys(submittedFields).slice(0,5).join(','),
       };
       for (const [fname, fval] of Object.entries(submittedFields)) {
         const fdef = FIELD_MAP[fname];
