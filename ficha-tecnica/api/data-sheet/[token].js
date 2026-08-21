@@ -360,15 +360,20 @@ function renderReadOnly(label, value) {
   </div>`;
 }
 
-function renderInput(label, name, type, options, oriClass) {
+function renderInput(label, name, type, options, oriClass, currentValue) {
+  const safeVal = (currentValue !== null && currentValue !== undefined && currentValue !== false) ? String(currentValue) : '';
   let input;
   if (type === 'selection' && options) {
-    const opts = options.map(([v, t]) => `<option value="${escHtml(v)}">${escHtml(t)}</option>`).join('');
+    const opts = options.map(([v, t]) =>
+      `<option value="${escHtml(v)}"${safeVal === v ? ' selected' : ''}>${escHtml(t)}</option>`
+    ).join('');
     input = `<select name="${escHtml(name)}" class="field-input">\n        <option value="">— Seleccionar —</option>\n        ${opts}\n      </select>`;
   } else if (type === 'integer') {
-    input = `<input type="number" name="${escHtml(name)}" class="field-input" min="0" step="1" placeholder="Numero de palas...">`;
+    const numAttr = safeVal ? ` value="${escHtml(safeVal)}"` : '';
+    input = `<input type="number" name="${escHtml(name)}" class="field-input" min="0" step="1" placeholder="Numero de palas..."${numAttr}>`;
   } else {
-    input = `<input type="text" name="${escHtml(name)}" class="field-input" placeholder="Introduzca el valor...">`;
+    const valAttr = safeVal ? ` value="${escHtml(safeVal)}"` : '';
+    input = `<input type="text" name="${escHtml(name)}" class="field-input" placeholder="Introduzca el valor..."${valAttr}>`;
   }
   const cls = oriClass === 'verify' ? 'field verify-note' : 'field';
   const note = oriClass === 'verify' ? '<span class="verify-badge">Por verificar</span>' : '';
@@ -409,7 +414,7 @@ function renderForm(token, sheet, projectName, serialRef) {
         if (isReadOnly) {
           fieldsHtml += renderReadOnly(f.label + (oriVal === 'verify' ? ' [a verificar]' : ''), odooVal);
         } else {
-          fieldsHtml += renderInput(f.label, f.name, f.type, f.options || null, oriVal);
+          fieldsHtml += renderInput(f.label, f.name, f.type, f.options || null, oriVal, odooVal);
         }
       }
     }
@@ -634,17 +639,37 @@ module.exports = async (req, res) => {
       }
 
       if (sheet.x_portal_submitted) {
+        // Resolve project serial for the title
+        let subSerial = 'Proyecto';
+        const spf = sheet.x_project_id;
+        const spId = Array.isArray(spf) ? spf[0] : spf;
+        if (spId) {
+          try {
+            const sproj = await searchRead('project.project', [['id', '=', spId]], ['name', 'x_serial_antrade']);
+            if (sproj.length) subSerial = sproj[0].x_serial_antrade || sproj[0].name;
+          } catch (_) {}
+        }
+        const dataSummary = buildEmailTable(sheet, {}, {});
         const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Formulario ya enviado</title>
-<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-background:#f8f9fa;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.card{background:#fff;border:2px solid #fcd34d;border-radius:8px;padding:40px;
-max-width:480px;text-align:center}h1{color:#92400e;font-size:1.3rem;margin-bottom:12px}
-p{color:#555;line-height:1.6}</style></head><body>
-<div class="card"><h1>Formulario ya enviado</h1>
-<p>Este formulario ya fue completado anteriormente. Si necesita realizar correcciones,
-contacte con Antrade Servitech.</p></div></body></html>`;
+<title>Formulario ya enviado — ${escHtml(subSerial)}</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8f9fa;
+  margin:0;padding:20px}
+.header{background:#fff;border:2px solid #fcd34d;border-radius:8px;padding:24px 28px;
+  max-width:820px;margin:0 auto 20px;text-align:center}
+h1{color:#92400e;font-size:1.2rem;margin:0 0 8px}
+.sub{color:#555;font-size:.9rem;line-height:1.5}
+.data-wrap{max-width:820px;margin:0 auto}
+</style></head><body>
+<div class="header">
+  <h1>Formulario ya enviado — ${escHtml(subSerial)}</h1>
+  <p class="sub">Este formulario ya fue completado anteriormente.<br>
+  A continuacion puede revisar los datos registrados. Para realizar correcciones,
+  contacte con Antrade Servitech.</p>
+</div>
+<div class="data-wrap">${dataSummary}</div>
+</body></html>`;
         return res.setHeader('Content-Type', 'text/html; charset=utf-8').status(200).send(html);
       }
 
@@ -814,7 +839,7 @@ contacte con Antrade Servitech.</p></div></body></html>`;
           '<span style="color:#78350f;font-size:12px">Pulsa el boton "Regenerar PDF" en la ficha de Odoo para reintentarlo.</span>' +
           '</div>'
         : '<div style="background:#f0fdf4;border:1px solid #86efac;padding:12px 16px;border-radius:4px;margin-bottom:16px">' +
-          '<strong style="color:#166534">PDF generado y adjunto en este correo y en el registro de Odoo.</strong>' +
+          '<strong style="color:#166534">PDF generado correctamente — disponible en el registro de la ficha en Odoo (ir.attachment id=' + pdfAttachmentId + ').</strong>' +
           '</div>';
 
       const jesusBody = (
@@ -832,10 +857,6 @@ contacte con Antrade Servitech.</p></div></body></html>`;
         email_to: 'j.guzman@antradeservitech.com',
         auto_delete: false,
       };
-      // Attach PDF to the email if generated (link to existing attachment, not a copy)
-      if (pdfAttachmentId) {
-        mailPayload.attachment_ids = [[4, pdfAttachmentId, 0]];
-      }
 
       let jesusMailStatus = null;
       try {
