@@ -859,8 +859,9 @@ h1{color:#92400e;font-size:1.2rem;margin:0 0 8px}
       };
 
       let jesusMailStatus = null;
+      let jesusMailId = null;
       try {
-        const jesusMailId = await execute('mail.mail', 'create', [mailPayload]);
+        jesusMailId = await execute('mail.mail', 'create', [mailPayload]);
         await execute('mail.mail', 'send', [[jesusMailId]]);
         console.log('[token].js STEP D: aviso Jesus mail.mail id=' + jesusMailId + ' para ' + serialRef);
 
@@ -881,7 +882,25 @@ h1{color:#92400e;font-size:1.2rem;margin:0 0 8px}
         }
       } catch (mailErr) {
         console.error('[token].js aviso Jesus mail.mail error:', mailErr.message);
-        jesusMailStatus = 'Error correo ' + nowLocale + ': ' + mailErr.message.substring(0, 100);
+        // mail.send() may have timed out even though Odoo delivered the email.
+        // If the mail record exists and state=sent, treat it as success.
+        if (jesusMailId !== null) {
+          try {
+            const mailRecs2 = await execute('mail.mail', 'read', [[jesusMailId]],
+              { fields: ['state', 'failure_reason'] });
+            if (mailRecs2.length && mailRecs2[0].state === 'sent') {
+              console.log('[token].js mail actually sent despite timeout, id=' + jesusMailId);
+              jesusMailStatus = 'Enviado ' + nowLocale + (pdfErrorMsg ? ' (sin PDF adjunto — error PDF)' : ' (con PDF adjunto)');
+              try { await execute('mail.mail', 'unlink', [[jesusMailId]]); } catch (_) {}
+            } else {
+              jesusMailStatus = 'Error correo ' + nowLocale + ': ' + mailErr.message.substring(0, 100);
+            }
+          } catch (_) {
+            jesusMailStatus = 'Error correo ' + nowLocale + ': ' + mailErr.message.substring(0, 100);
+          }
+        } else {
+          jesusMailStatus = 'Error correo ' + nowLocale + ': ' + mailErr.message.substring(0, 100);
+        }
       }
 
       if (jesusMailStatus) {
