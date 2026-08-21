@@ -794,6 +794,7 @@ h1{color:#92400e;font-size:1.2rem;margin:0 0 8px}
       let pdfErrorMsg = null;
 
       try {
+        if (body.__force_pdf_failure) throw new Error('TEST_FORCED_PDF_FAILURE — solo para pruebas, no en produccion');
         const pdfBytes = await buildPdf(
           sheet,
           serialRef,
