@@ -316,7 +316,9 @@ module.exports = async (req, res) => {
     const declarant = 'Antrade Servitech SL (regeneracion ' + nowStr + ')';
 
     const pdfBytes = await buildPdf(sheet, serialRef, declarant, nowStr);
+    console.log('[regenerate-pdf] pdfBytes type=' + typeof pdfBytes + ' length=' + (pdfBytes ? pdfBytes.length : 'null'));
     const pdfB64 = Buffer.from(pdfBytes).toString('base64');
+    console.log('[regenerate-pdf] pdfB64 length=' + pdfB64.length);
     const pdfName = `FichaTF_${serialRef.replace(/[^a-zA-Z0-9_-]/g, '_')}_regen_${now.toISOString().slice(0,10)}.pdf`;
 
     // Attach to Odoo
@@ -345,6 +347,7 @@ module.exports = async (req, res) => {
       sheet_id: sheetId,
       attachment_id: attId,
       pdf_name: pdfName,
+      _dbg: { pdf_bytes: pdfBytes ? pdfBytes.length : 0, pdf_b64: pdfB64.length },
       message: 'PDF regenerado correctamente. ir.attachment id=' + attId,
     });
 
