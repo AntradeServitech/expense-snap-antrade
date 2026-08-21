@@ -1,6 +1,12 @@
 /**
  * GET  /api/data-sheet/[token]  — Renders the client-facing data form
- * POST /api/data-sheet/[token]  — Processes the submission, generates PDF, emails Jesus
+ * POST /api/data-sheet/[token]  — Processes the submission
+ *
+ * Order of operations in POST (guaranteed, regardless of PDF outcome):
+ *   STEP A — Save all content fields + mark x_portal_submitted in Odoo  (CRITICAL, no inner try/catch)
+ *   STEP B — Build HTML email table from submitted values               (always)
+ *   STEP C — Generate PDF and attach to Odoo                           (isolated try/catch)
+ *   STEP D — Send email to Jesus with table + PDF attachment if available (always)
  *
  * Token format: {payload_base64url}.{hmac_sha256_hex}
  * Payload: JSON { id: <sheet_id>, exp: <unix_seconds> }
@@ -107,11 +113,19 @@ const SECTIONS = [
   },
 ];
 
+// Lookup map: field name -> field definition (for type checks during write)
+const FIELD_MAP = {};
+for (const sec of SECTIONS) {
+  for (const f of sec.fields) {
+    if (f.name) FIELD_MAP[f.name] = f;
+  }
+}
+
 // Fields to read from Odoo (all non-binary value fields + all ori fields + portal fields)
 function buildFieldList() {
   const fields = [
     'id', 'x_project_id', 'x_portal_submitted', 'x_portal_expires_at',
-    'x_state', 'x_portal_first_viewed_at',
+    'x_state', 'x_portal_first_viewed_at', 'x_pdf_generation_error',
   ];
   for (const sec of SECTIONS) {
     for (const f of sec.fields) {
@@ -273,7 +287,7 @@ async function buildPdf(sheet, projectName, submission) {
 }
 
 // ---------------------------------------------------------------------------
-// HTML rendering
+// Email HTML table — built from submitted values + sheet ori fields
 // ---------------------------------------------------------------------------
 function escHtml(s) {
   if (!s) return '';
@@ -282,6 +296,62 @@ function escHtml(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function buildEmailTable(sheet, submittedFields, submittedFiles) {
+  let html = '<hr style="border:none;border-top:2px solid #dee2e6;margin:20px 0">';
+  html += '<h2 style="color:#1a56a8;font-size:1rem;margin-bottom:16px">Datos declarados por el cliente</h2>';
+
+  for (const sec of SECTIONS) {
+    html += `<h3 style="color:#333;font-size:.85rem;font-weight:700;margin:16px 0 6px;` +
+            `text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #dee2e6;` +
+            `padding-bottom:4px">${escHtml(sec.title)}</h3>`;
+    html += '<table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:4px">';
+    html += '<thead><tr>' +
+            '<th style="text-align:left;padding:5px 8px;background:#e8f0fc;border:1px solid #b6cff5;width:42%">Campo</th>' +
+            '<th style="text-align:left;padding:5px 8px;background:#e8f0fc;border:1px solid #b6cff5;width:42%">Valor</th>' +
+            '<th style="text-align:left;padding:5px 8px;background:#e8f0fc;border:1px solid #b6cff5;width:16%">Origen</th>' +
+            '</tr></thead><tbody>';
+
+    for (const f of sec.fields) {
+      if (f.type === 'binary') {
+        const noteKey = (f.ori || '').replace('_ori', '_filename');
+        const fileNote = (submittedFiles && submittedFiles[f.fileName || f.ori])
+          ? escHtml(submittedFiles[f.fileName || f.ori])
+          : '<em style="color:#999">(a enviar por email)</em>';
+        html += `<tr><td style="padding:4px 8px;border:1px solid #dee2e6;color:#555">${escHtml(f.label)}</td>` +
+                `<td style="padding:4px 8px;border:1px solid #dee2e6;color:#888">[Archivo] ${fileNote}</td>` +
+                `<td style="padding:4px 8px;border:1px solid #dee2e6;color:#888;font-size:11px">—</td></tr>`;
+        continue;
+      }
+
+      const ori = f.ori ? (sheet[f.ori] || 'client') : 'client';
+      const oriLabel = ori === 'known' ? 'Antrade' : ori === 'verify' ? 'Verificar' : 'Cliente';
+      const bg = ori === 'known' ? '#f0fdf4' : ori === 'verify' ? '#fffbeb' : '#ffffff';
+      const oriColor = ori === 'known' ? '#166534' : ori === 'verify' ? '#92400e' : '#6c757d';
+
+      // Use submitted value if present, otherwise fall back to pre-filled Odoo value
+      let rawVal = '';
+      if (f.name && submittedFields && submittedFields[f.name] !== undefined && submittedFields[f.name] !== '') {
+        rawVal = String(submittedFields[f.name]);
+      } else if (f.name && sheet[f.name] !== undefined && sheet[f.name] !== false) {
+        rawVal = String(sheet[f.name]);
+      }
+      const displayVal = rawVal || '<em style="color:#999">—</em>';
+      const fontWeight = rawVal ? '500' : '300';
+
+      html += `<tr style="background:${bg}">` +
+              `<td style="padding:4px 8px;border:1px solid #dee2e6">${escHtml(f.label)}</td>` +
+              `<td style="padding:4px 8px;border:1px solid #dee2e6;font-weight:${fontWeight}">${rawVal ? escHtml(rawVal) : displayVal}</td>` +
+              `<td style="padding:4px 8px;border:1px solid #dee2e6;font-size:11px;color:${oriColor}">${escHtml(oriLabel)}</td>` +
+              '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+  return html;
+}
+
+// ---------------------------------------------------------------------------
+// HTML form rendering (client-facing)
+// ---------------------------------------------------------------------------
 function renderReadOnly(label, value) {
   return `
   <div class="field readonly">
@@ -554,7 +624,7 @@ module.exports = async (req, res) => {
       }
       const sheet = sheets[0];
 
-      // Register first access (item 8) — write once, non-blocking
+      // Register first access — write once, non-blocking
       if (!sheet.x_portal_first_viewed_at) {
         const viewedAt = new Date().toISOString().replace('T', ' ').substring(0, 19);
         try {
@@ -633,7 +703,7 @@ contacte con Antrade Servitech.</p></div></body></html>`;
       });
       const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
 
-      // Collect submitted fields
+      // Collect submitted field values and file notes
       const submittedFields = {};
       for (const sec of SECTIONS) {
         for (const f of sec.fields) {
@@ -642,8 +712,6 @@ contacte con Antrade Servitech.</p></div></body></html>`;
           }
         }
       }
-
-      // Collect submitted file notes
       const submittedFiles = {};
       for (const sec of SECTIONS) {
         for (const f of sec.fields) {
@@ -663,24 +731,53 @@ contacte con Antrade Servitech.</p></div></body></html>`;
         if (projs.length) serialRef = projs[0].x_serial_antrade || projs[0].name;
       }
 
-      // Generate PDF
-      const pdfBytes = await buildPdf(
-        sheet,
-        serialRef,
-        { declarant, submittedAt, ip, fields: submittedFields, files: submittedFiles }
-      );
-      const pdfB64 = Buffer.from(pdfBytes).toString('base64');
-      const pdfName = `FichaTF_${serialRef.replace(/[^a-zA-Z0-9_-]/g, '_')}_${now.toISOString().slice(0,10)}.pdf`;
-
-      // Mark as submitted in Odoo
-      await execute(SHEET_MODEL, 'write', [[sheetId], {
+      // =========================================================
+      // STEP A — SAVE CONTENT FIELDS TO ODOO (FIRST, CRITICAL)
+      //   This write is NOT wrapped in its own try/catch.
+      //   If it fails, the outer catch returns 500 and the client
+      //   can retry — x_portal_submitted stays false.
+      // =========================================================
+      const odooWritePayload = {
         x_portal_submitted: true,
         x_state: 'client_review',
-      }]);
+        x_pdf_generation_error: false,  // clear any prior error
+      };
+      for (const [fname, fval] of Object.entries(submittedFields)) {
+        const fdef = FIELD_MAP[fname];
+        if (!fdef) continue;
+        if (fdef.type === 'integer') {
+          const n = parseInt(fval, 10);
+          if (!isNaN(n)) odooWritePayload[fname] = n;
+        } else if (fval !== null && fval !== undefined && String(fval).trim() !== '') {
+          odooWritePayload[fname] = String(fval);
+        }
+      }
+      await execute(SHEET_MODEL, 'write', [[sheetId], odooWritePayload]);
+      console.log('[token].js STEP A: fields saved to Odoo, x_portal_submitted=true for sheet', sheetId);
 
-      // Attach PDF to Odoo data sheet record
+      // =========================================================
+      // STEP B — BUILD HTML EMAIL TABLE (always, uses submitted values)
+      // =========================================================
+      const emailTableHtml = buildEmailTable(sheet, submittedFields, submittedFiles);
+
+      // =========================================================
+      // STEP C — GENERATE PDF AND ATTACH TO ODOO (isolated, non-critical)
+      //   If this fails: write x_pdf_generation_error, keep going.
+      //   The data from STEP A is already safe in Odoo.
+      // =========================================================
+      let pdfAttachmentId = null;
+      let pdfErrorMsg = null;
+
       try {
-        await execute('ir.attachment', 'create', [{
+        const pdfBytes = await buildPdf(
+          sheet,
+          serialRef,
+          { declarant, submittedAt, ip, fields: submittedFields, files: submittedFiles }
+        );
+        const pdfB64 = Buffer.from(pdfBytes).toString('base64');
+        const pdfName = `FichaTF_${serialRef.replace(/[^a-zA-Z0-9_-]/g, '_')}_${now.toISOString().slice(0,10)}.pdf`;
+
+        const attRaw = await execute('ir.attachment', 'create', [{
           name: pdfName,
           type: 'binary',
           datas: pdfB64,
@@ -688,61 +785,84 @@ contacte con Antrade Servitech.</p></div></body></html>`;
           res_id: sheetId,
           mimetype: 'application/pdf',
         }]);
-      } catch (attErr) {
-        console.error('[token].js ir.attachment.create error:', attErr.message);
+        pdfAttachmentId = Array.isArray(attRaw) ? attRaw[0] : attRaw;
+        console.log('[token].js STEP C: PDF generated and attached, ir.attachment id=' + pdfAttachmentId);
+
+      } catch (pdfErr) {
+        pdfErrorMsg = (pdfErr.message || 'Error desconocido').substring(0, 200);
+        console.error('[token].js STEP C PDF error:', pdfErr.message);
+        try {
+          await execute(SHEET_MODEL, 'write', [[sheetId], { x_pdf_generation_error: pdfErrorMsg }]);
+        } catch (_) {}
       }
 
-      // Aviso a Jesus via mail.mail de Odoo (sin SMTP en Vercel)
-      // Nota: base.automation id=42 no dispara en modelos custom (bug Odoo SaaS on_write hook),
-      // por lo que se envia directamente aqui.
+      // =========================================================
+      // STEP D — SEND EMAIL TO JESUS (always, regardless of PDF)
+      //   Body: pdfNote banner + full data table
+      //   Attachment: PDF ir.attachment if generated (link, not copy)
+      // =========================================================
+      const nowLocale = now.toLocaleString('es-ES', {
+        timeZone: 'Europe/Madrid',
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
+
+      const pdfBanner = pdfErrorMsg
+        ? '<div style="background:#fef3c7;border:1px solid #fcd34d;padding:12px 16px;border-radius:4px;margin-bottom:16px">' +
+          '<strong style="color:#92400e">Aviso: PDF pendiente de regenerar — datos completos abajo</strong><br>' +
+          '<span style="color:#78350f;font-size:12px">Error: ' + escHtml(pdfErrorMsg) + '</span><br>' +
+          '<span style="color:#78350f;font-size:12px">Pulsa el boton "Regenerar PDF" en la ficha de Odoo para reintentarlo.</span>' +
+          '</div>'
+        : '<div style="background:#f0fdf4;border:1px solid #86efac;padding:12px 16px;border-radius:4px;margin-bottom:16px">' +
+          '<strong style="color:#166534">PDF generado y adjunto en este correo y en el registro de Odoo.</strong>' +
+          '</div>';
+
+      const jesusBody = (
+        '<p style="margin-bottom:12px">El cliente ha completado la Ficha de Datos Tecnicos del proyecto ' +
+        '<strong>' + escHtml(serialRef) + '</strong>.</p>' +
+        '<p style="margin-bottom:12px">Declarante: <strong>' + escHtml(declarant) + '</strong> — ' +
+        escHtml(submittedAt) + ' (IP: ' + escHtml(String(ip).split(',')[0].trim()) + ')</p>' +
+        pdfBanner +
+        emailTableHtml
+      );
+
+      const mailPayload = {
+        subject: '[FICHA TF] ' + serialRef + ' - Datos recibidos del cliente',
+        body_html: jesusBody,
+        email_to: 'j.guzman@antradeservitech.com',
+        auto_delete: false,
+      };
+      // Attach PDF to the email if generated (link to existing attachment, not a copy)
+      if (pdfAttachmentId) {
+        mailPayload.attachment_ids = [[4, pdfAttachmentId, 0]];
+      }
+
       let jesusMailStatus = null;
       try {
-        const jesusBody = (
-          '<p>El cliente ha completado la Ficha de Datos Tecnicos del proyecto ' +
-          '<strong>' + serialRef + '</strong>.</p>' +
-          '<p>El PDF con los datos declarados esta adjunto en el registro de la ' +
-          'ficha en Odoo (Proyecto &gt; Ficha TF). Revisa los datos y actualiza el ' +
-          'estado a Completado si todo es correcto.</p>'
-        );
-        const jesusMailId = await execute('mail.mail', 'create', [{
-          subject: '[FICHA TF] ' + serialRef + ' - Datos recibidos del cliente',
-          body_html: jesusBody,
-          email_to: 'j.guzman@antradeservitech.com',
-          auto_delete: false,
-        }]);
+        const jesusMailId = await execute('mail.mail', 'create', [mailPayload]);
         await execute('mail.mail', 'send', [[jesusMailId]]);
-        console.log('[token].js aviso Jesus: mail.mail id=' + jesusMailId + ' para ' + serialRef);
-        // Leer estado real del correo para x_last_email_status
-        const nowStr = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
-          day: '2-digit', month: '2-digit', year: 'numeric',
-          hour: '2-digit', minute: '2-digit' });
+        console.log('[token].js STEP D: aviso Jesus mail.mail id=' + jesusMailId + ' para ' + serialRef);
+
         try {
           const mailRecs = await execute('mail.mail', 'read', [[jesusMailId]],
             { fields: ['state', 'failure_reason'] });
           if (mailRecs.length && mailRecs[0].state === 'exception') {
             const reason = (mailRecs[0].failure_reason || 'desconocido').substring(0, 120);
-            jesusMailStatus = 'Error ' + nowStr + ': ' + reason;
+            jesusMailStatus = 'Error correo ' + nowLocale + ': ' + reason;
             console.error('[token].js aviso Jesus mail exception:', reason);
           } else {
-            jesusMailStatus = 'Enviado ' + nowStr;
+            jesusMailStatus = 'Enviado ' + nowLocale + (pdfErrorMsg ? ' (sin PDF adjunto — error PDF)' : ' (con PDF adjunto)');
             try { await execute('mail.mail', 'unlink', [[jesusMailId]]); } catch (_) {}
           }
         } catch (_) {
-          // Registro desaparecio = auto_delete tras envio exitoso
-          const nowStr2 = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
-            day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit' });
-          jesusMailStatus = 'Enviado ' + nowStr2;
+          // Record disappeared = auto_delete after successful send
+          jesusMailStatus = 'Enviado ' + nowLocale + (pdfErrorMsg ? ' (sin PDF adjunto — error PDF)' : ' (con PDF adjunto)');
         }
       } catch (mailErr) {
         console.error('[token].js aviso Jesus mail.mail error:', mailErr.message);
-        const nowErrStr = now.toLocaleString('es-ES', { timeZone: 'Europe/Madrid',
-          day: '2-digit', month: '2-digit', year: 'numeric',
-          hour: '2-digit', minute: '2-digit' });
-        jesusMailStatus = 'Error ' + nowErrStr + ': ' + mailErr.message.substring(0, 100);
+        jesusMailStatus = 'Error correo ' + nowLocale + ': ' + mailErr.message.substring(0, 100);
       }
 
-      // Escribir estado del correo en la ficha (campo x_last_email_status)
       if (jesusMailStatus) {
         try {
           await execute(SHEET_MODEL, 'write', [[sheetId], { x_last_email_status: jesusMailStatus }]);
