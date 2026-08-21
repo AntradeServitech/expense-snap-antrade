@@ -16,6 +16,13 @@
 
 const crypto = require('crypto');
 const { PDFDocument, StandardFonts, rgb, PageSizes } = require('pdf-lib');
+const fs   = require('fs');
+const path = require('path');
+
+const LOGO_BYTES = (() => {
+  try { return fs.readFileSync(path.join(__dirname, '../../public/logo-antrade.png')); }
+  catch (_) { return null; }
+})();
 const { execute, searchRead } = require('../_lib/odoo.js');
 const SHEET_MODEL = 'x_transfluid_data_sheet';
 
@@ -26,7 +33,7 @@ const SHEET_MODEL = 'x_transfluid_data_sheet';
 const SECTIONS = [
   {
     id: 'tf430',
-    title: 'TF7430 — Datos de Instalacion',
+    title: 'TF7430 - Datos de Instalacion',
     fields: [
       { name: 'x_tf430_iacs_society',    ori: 'x_tf430_iacs_society_ori',    label: 'Sociedad clasificadora IACS (si/no, cual)',                    type: 'char' },
       { name: 'x_tf430_cert_required',   ori: 'x_tf430_cert_required_ori',   label: 'Certificacion requerida (tipo)',                                type: 'char' },
@@ -45,7 +52,7 @@ const SECTIONS = [
   },
   {
     id: 'tf7324_motor',
-    title: 'TF7324 — Motor Diesel',
+    title: 'TF7324 - Motor Diesel',
     fields: [
       { name: 'x_7324_eng_type',         ori: 'x_7324_eng_type_ori',         label: 'Tipo de motor diesel',                                          type: 'char' },
       { name: 'x_7324_eng_power_rpm',    ori: 'x_7324_eng_power_rpm_ori',    label: 'Potencia y regimen nominal (kW @ rpm)',                         type: 'char' },
@@ -65,7 +72,7 @@ const SECTIONS = [
   },
   {
     id: 'tf7324_gb',
-    title: 'TF7324 — Reductora',
+    title: 'TF7324 - Reductora',
     fields: [
       { name: 'x_7324_gb_tors_iner',    ori: 'x_7324_gb_tors_iner_ori',    label: 'Inercia sistema torsional de la reductora (kgm2)',               type: 'char' },
       { name: 'x_7324_gb_ratio',         ori: 'x_7324_gb_ratio_ori',         label: 'Relacion de reduccion',                                          type: 'char' },
@@ -76,7 +83,7 @@ const SECTIONS = [
   },
   {
     id: 'tf7324_coup',
-    title: 'TF7324 — Acoplamiento Motor-Reductora',
+    title: 'TF7324 - Acoplamiento Motor-Reductora',
     fields: [
       { name: 'x_7324_coup_basic',       ori: 'x_7324_coup_basic_ori',       label: 'Tipo basico de acoplamiento',                                    type: 'char' },
       { name: 'x_7324_coup_detail',      ori: 'x_7324_coup_detail_ori',       label: 'Detalles constructivos del acoplamiento',                        type: 'char' },
@@ -84,7 +91,7 @@ const SECTIONS = [
   },
   {
     id: 'tf7324_cardan',
-    title: 'TF7324 — Eje Cardan',
+    title: 'TF7324 - Eje Cardan',
     fields: [
       { name: 'x_7324_cardan_iner',      ori: 'x_7324_cardan_iner_ori',      label: 'Eje cardan: inercia (kgm2)',                                     type: 'char' },
       { name: 'x_7324_cardan_iner_sti',  ori: 'x_7324_cardan_iner_sti_ori',  label: 'Eje cardan: inercia y rigidez torsional (kgm2 / Nm/rad)',         type: 'char' },
@@ -93,7 +100,7 @@ const SECTIONS = [
   },
   {
     id: 'tf7324_tail',
-    title: 'TF7324 — Eje de Cola',
+    title: 'TF7324 - Eje de Cola',
     fields: [
       { name: 'x_7324_tail_iner',        ori: 'x_7324_tail_iner_ori',        label: 'Eje de cola: inercia (kgm2)',                                    type: 'char' },
       { name: 'x_7324_tail_iner_sti',    ori: 'x_7324_tail_iner_sti_ori',    label: 'Eje de cola: inercia y rigidez torsional',                       type: 'char' },
@@ -102,7 +109,7 @@ const SECTIONS = [
   },
   {
     id: 'tf7324_prop',
-    title: 'TF7324 — Helice',
+    title: 'TF7324 - Helice',
     fields: [
       { name: 'x_7324_prop_type',        ori: 'x_7324_prop_type_ori',        label: 'Tipo de helice',                                                  type: 'selection', options: [['con_tobera','Con tobera'],['sin_tobera','Sin tobera']] },
       { name: 'x_7324_prop_geom',        ori: 'x_7324_prop_geom_ori',        label: 'Geometria de la helice (diametro, paso)',                         type: 'char' },
@@ -174,7 +181,7 @@ async function buildPdf(sheet, projectName, submission) {
   const ML = 45, MR = 45, MT = 50, MB = 45;
   const CW = W - ML - MR;
   const LINE = 14;
-  const SECTION_GAP = 10;
+  const SECTION_GAP = 18;
 
   let page = pdfDoc.addPage([W, H]);
   let y = H - MT;
@@ -224,7 +231,15 @@ async function buildPdf(sheet, projectName, submission) {
     y -= 6;
   }
 
-  // — Title —
+  // — Logo top-right + Title —
+  if (LOGO_BYTES) {
+    try {
+      const logoImg = await pdfDoc.embedPng(LOGO_BYTES);
+      const logoH = 36;
+      const logoW = (logoImg.width / logoImg.height) * logoH;
+      page.drawImage(logoImg, { x: W - MR - logoW, y: H - MT - logoH + 8, width: logoW, height: logoH });
+    } catch (_) { /* logo opcional */ }
+  }
   drawLine('FICHA DE DATOS TECNICOS TRANSFLUID', ML, 14, true, rgb(0.1, 0.33, 0.67));
   drawLine(`Proyecto: ${toPdf(projectName)}`, ML, 11, false, rgb(0.2, 0.2, 0.2));
   hRule(true);
@@ -244,9 +259,11 @@ async function buildPdf(sheet, projectName, submission) {
 
   // — Sections —
   for (const sec of SECTIONS) {
-    ensureSpace(LINE * 3 + SECTION_GAP);
-    y -= SECTION_GAP / 2;
-    drawLine(sec.title, ML, 10, true, rgb(0.1, 0.33, 0.67));
+    ensureSpace(LINE * 3 + SECTION_GAP + 20);
+    y -= SECTION_GAP;
+    hRule(true);
+    y -= 2;
+    drawLine(sec.title, ML, 11, true, rgb(0.1, 0.33, 0.67));
     hRule(false);
 
     for (const f of sec.fields) {
@@ -254,7 +271,7 @@ async function buildPdf(sheet, projectName, submission) {
 
       if (f.type === 'binary') {
         const provided = submission.files && submission.files[f.fileName || f.ori];
-        const val = provided ? `[Archivo adjunto: ${toPdf(provided)}]` : '[No enviado — remitir por email]';
+        const val = provided ? `[Archivo adjunto: ${toPdf(provided)}]` : '[No enviado - remitir por email]';
         const ori = sheet[f.ori] || '';
         const oriLabel = ori === 'known' ? '[Antrade]' : ori === 'verify' ? '[Verificar]' : '[Cliente]';
         drawLine(`${f.label} ${oriLabel}`, ML + 4, 8, true, rgb(0.3, 0.3, 0.3));
@@ -270,7 +287,7 @@ async function buildPdf(sheet, projectName, submission) {
         if (isReadOnly) {
           drawLine(`  Referencia: ${odooVal}   ${oriLabel}`, ML + 12, 8, false, rgb(0.15, 0.45, 0.15));
         } else {
-          const displayVal = clientVal || odooVal || '— (no proporcionado) —';
+          const displayVal = clientVal || odooVal || '(no proporcionado)';
           const c = clientVal ? rgb(0, 0, 0) : rgb(0.55, 0.55, 0.55);
           drawLine(`  ${displayVal}`, ML + 12, 8, false, c);
         }
