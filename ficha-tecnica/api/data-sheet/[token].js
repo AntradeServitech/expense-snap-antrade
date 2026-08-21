@@ -806,7 +806,7 @@ h1{color:#92400e;font-size:1.2rem;margin:0 0 8px}
         const attRaw = await execute('ir.attachment', 'create', [{
           name: pdfName,
           type: 'binary',
-          datas: pdfB64,
+          raw: pdfB64,
           res_model: SHEET_MODEL,
           res_id: sheetId,
           mimetype: 'application/pdf',

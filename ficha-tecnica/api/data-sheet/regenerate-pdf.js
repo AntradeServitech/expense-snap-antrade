@@ -321,11 +321,11 @@ module.exports = async (req, res) => {
     console.log('[regenerate-pdf] pdfB64 length=' + pdfB64.length);
     const pdfName = `FichaTF_${serialRef.replace(/[^a-zA-Z0-9_-]/g, '_')}_regen_${now.toISOString().slice(0,10)}.pdf`;
 
-    // Attach to Odoo
+    // Attach to Odoo (use 'raw' field, not 'datas', to avoid ORM base64 decode chain issues)
     const attRaw = await execute('ir.attachment', 'create', [{
       name: pdfName,
       type: 'binary',
-      datas: pdfB64,
+      raw: pdfB64,
       res_model: SHEET_MODEL,
       res_id: sheetId,
       mimetype: 'application/pdf',
