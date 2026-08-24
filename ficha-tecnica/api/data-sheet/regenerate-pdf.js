@@ -359,6 +359,8 @@ module.exports = async (req, res) => {
       sheet_id: sheetId,
       attachment_id: attId,
       pdf_name: pdfName,
+      pdf_bytes: pdfBytes.length,
+      has_logo: LOGO_BYTES !== null,
       message: 'PDF regenerado correctamente. ir.attachment id=' + attId,
     });
 
