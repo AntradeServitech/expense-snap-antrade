@@ -2,9 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "outputDirectory": "public",
   "functions": {
-    "api/data-sheet/[token].js": { "maxDuration": 30 },
-    "api/data-sheet/prepare.js":  { "maxDuration": 30 },
-    "api/data-sheet/send.js":     { "maxDuration": 30 }
+    "api/data-sheet/[token].js":        { "maxDuration": 30 },
+    "api/data-sheet/prepare.js":         { "maxDuration": 30 },
+    "api/data-sheet/send.js":            { "maxDuration": 30 },
+    "api/data-sheet/regenerate-pdf.js":  { "maxDuration": 60 }
   },
   "headers": [
     {
