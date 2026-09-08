@@ -75,7 +75,7 @@ async function buildPdf(data, declarant, ip) {
   const propMap = { parallel: 'Híbrido en Paralelo', series: 'Híbrido en Serie', electric: 'Eléctrico Puro' };
   const catMap = { armador: 'Armador', astillero: 'Astillero', integrador: 'Integrador', usuario_final: 'Usuario Final' };
   const appMap = { commercial: 'Comercial', pleasure: 'Recreo', fishing: 'Pesca', patrol: 'Patrullero', ferry: 'Ferry', other: 'Otro' };
-  const hullMap = { mono: 'Monocasco', catamaran: 'Catamarán', trimaran: 'Trimarán', planing: 'Planeo', semi: 'Semi-planeo' };
+  const hullMap = { mono: 'Monocasco', catamaran: 'Catamarán', trimaran: 'Trimarán' };
   const yn = v => bool(v) ? 'Sí' : 'No';
 
   const fields = [
@@ -90,7 +90,7 @@ async function buildPdf(data, declarant, ip) {
     ['Tipo de casco', hullMap[data.x_hull_type] || data.x_hull_type || '—'],
     ['Aplicación', appMap[data.x_application] || data.x_application || '—'],
     ['Modelo buque', data.x_vessel_model || '—'],
-    ['Eslora en flotación (m)', data.x_waterline_length],
+    ['Eslora de flotación (m)', data.x_waterline_length],
     ['Desplazamiento máx. (t)', data.x_max_displacement],
     ['Sistema de propulsión', propMap[data.x_propulsion_type] || data.x_propulsion_type || '—'],
   ];
@@ -206,16 +206,17 @@ input.bad,select.bad{border-color:var(--err)}
 .rg{display:flex;flex-direction:column;gap:7px}
 .ri{display:flex;align-items:flex-start;gap:9px;cursor:pointer;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:var(--off);transition:.15s;user-select:none}
 .ri:hover{border-color:var(--gold)}
-.ri input{margin-top:3px;accent-color:var(--gold);flex-shrink:0}
-.ri .rl{cursor:pointer;font-size:.88rem;margin:0;font-weight:400;color:var(--text)}
+.ri input{margin-top:3px;accent-color:var(--gold);flex-shrink:0;width:auto}
+.ri .rl{cursor:pointer;font-size:.88rem;margin:0;font-weight:400;color:var(--text);flex:1;min-width:0}
 .ri .rl strong{display:block;font-weight:600;font-size:.83rem;color:var(--navy)}
+#s3 .ri .rl,#s5 .ri .rl{overflow-wrap:break-word;word-break:break-word}
 .ri.sel{border-color:var(--gold);background:#fffbee}
 .cond{display:none}.cond.on{display:block}
 .sec-lbl{font-size:.68rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding-bottom:7px;border-bottom:1px solid var(--border);margin-bottom:14px}
 .parallel-alert{background:#fff8e0;border-left:4px solid var(--gold);padding:11px 15px;border-radius:0 7px 7px 0;margin-bottom:14px;font-size:.83rem;color:#6b4c00}
 .rev-tbl{width:100%;border-collapse:collapse;font-size:.82rem}
 .rev-tbl th{text-align:left;padding:7px 11px;background:var(--navy);color:#fff;font-size:.72rem;letter-spacing:.05em}
-.rev-tbl td{padding:7px 11px;border-bottom:1px solid var(--border)}
+.rev-tbl td{padding:7px 11px;border-bottom:1px solid var(--border);overflow-wrap:break-word;word-break:break-word}
 .rev-tbl tr:nth-child(even) td{background:#f9fafb}
 .rev-tbl td:first-child{color:var(--muted);width:46%}
 .step-err{background:#fdf2f0;border:1px solid #e8b4af;border-radius:7px;padding:10px 14px;color:var(--err);font-size:.83rem;margin-bottom:14px;display:none}
@@ -269,8 +270,9 @@ input.bad,select.bad{border-color:var(--err)}
       <div class="rg">
         <label class="ri"><input type="radio" name="x_client_category" value="armador"/><span class="rl"><strong data-t="cat_arm"></strong><span data-t="cat_arm_d"></span></span></label>
         <label class="ri"><input type="radio" name="x_client_category" value="astillero"/><span class="rl"><strong data-t="cat_ast"></strong><span data-t="cat_ast_d"></span></span></label>
+        <label class="ri"><input type="radio" name="x_client_category" value="disenador"/><span class="rl"><strong data-t="cat_dis"></strong><span data-t="cat_dis_d"></span></span></label>
         <label class="ri"><input type="radio" name="x_client_category" value="integrador"/><span class="rl"><strong data-t="cat_int"></strong><span data-t="cat_int_d"></span></span></label>
-        <label class="ri"><input type="radio" name="x_client_category" value="usuario_final"/><span class="rl"><strong data-t="cat_usr"></strong><span data-t="cat_usr_d"></span></span></label>
+        <label class="ri"><input type="radio" name="x_client_category" value="otro"/><span class="rl"><strong data-t="cat_ot"></strong><span data-t="cat_ot_d"></span></span></label>
       </div>
     </div>
   </div>
@@ -331,8 +333,6 @@ input.bad,select.bad{border-color:var(--err)}
           <option value="mono" data-t="h_mono"></option>
           <option value="catamaran" data-t="h_cat"></option>
           <option value="trimaran" data-t="h_tri"></option>
-          <option value="planing" data-t="h_plan"></option>
-          <option value="semi" data-t="h_semi"></option>
         </select>
       </div>
       <div class="f">
@@ -572,8 +572,9 @@ es:{
   l_proj:'Nombre del Proyecto', l_vessel:'Nombre del Buque', l_country:'País de Instalación', l_cat:'Categoría del Cliente',
   cat_arm:'Armador', cat_arm_d:' — Propietario/operador del buque',
   cat_ast:'Astillero', cat_ast_d:' — Constructor o reparador naval',
+  cat_dis:'Diseñador', cat_dis_d:' — Empresa de ingeniería/diseño naval',
   cat_int:'Integrador', cat_int_d:' — Empresa integradora del sistema',
-  cat_usr:'Usuario Final', cat_usr_d:' — Operador directo de la embarcación',
+  cat_ot:'Otro', cat_ot_d:' — Otro tipo de cliente',
   l_class:'¿Requiere aprobación de sociedad de clasificación?',
   class_y:'Sí, requiere clasificación', class_n:'No aplica',
   l_class_name:'Sociedad de Clasificación', l_class_type:'Tipo de Aprobación',
@@ -582,14 +583,14 @@ es:{
   l_retrofit:'¿Instalación en buque existente (retrofit)?',
   ret_y:'Sí, retrofit en buque existente', ret_n:'No, buque de nueva construcción',
   l_prop_orig:'Propulsión original del buque',
-  po_motor:'Motor térmico', po_sail:'Vela', po_mixed:'Mixto (motor + vela)',
-  l_hull:'Tipo de casco', h_mono:'Monocasco', h_cat:'Catamarán', h_tri:'Trimarán', h_plan:'Planeo', h_semi:'Semi-planeo',
+  po_motor:'Motor diésel', po_sail:'Vela', po_mixed:'Mixto (motor + vela)',
+  l_hull:'Tipo de casco', h_mono:'Monocasco', h_cat:'Catamarán', h_tri:'Trimarán',
   l_app:'Aplicación', a_com:'Comercial', a_plea:'Recreo / Placer', a_fish:'Pesca', a_pat:'Patrullero', a_ferry:'Ferry', a_other:'Otro',
   l_model:'Modelo / Clase del buque (opcional)',
-  l_lwl:'Eslora en línea de flotación', h_lwl:'En metros',
+  l_lwl:'Eslora de flotación', h_lwl:'En metros',
   l_disp:'Desplazamiento máximo', h_disp:'En toneladas métricas',
   l_prop_lines:'Número de líneas de propulsión', pl_1:'1 línea', pl_2:'2 líneas',
-  pt_par:'Híbrido en Paralelo', pt_par_d:' — Motor eléctrico + motor térmico en el mismo eje',
+  pt_par:'Híbrido en Paralelo', pt_par_d:' — Motor eléctrico + motor diésel en el mismo eje',
   pt_ser:'Híbrido en Serie', pt_ser_d:' — Generador diesel + motor eléctrico independiente',
   pt_ele:'Eléctrico Puro', pt_ele_d:' — Solo propulsión eléctrica con baterías',
   par_notice:'⚡ Sistema híbrido en paralelo — nuestro equipo técnico lo revisará con prioridad.',
@@ -617,7 +618,7 @@ es:{
   sbm_note:'Al enviar, generaremos el resumen técnico y notificaremos a nuestro equipo. Recibirá una confirmación por correo.',
   btn_bk:'Anterior', btn_nx:'Siguiente', btn_sb:'Enviar Formulario', submitting:'Enviando…',
   ok_h:'Formulario enviado', ok_p:'Hemos recibido sus datos. Nuestro equipo técnico los revisará y se pondrá en contacto en los próximos días.',
-  err_cat:'Seleccione la categoría del cliente.', err_lwl:'Indique la eslora en línea de flotación.',
+  err_cat:'Seleccione la categoría del cliente.', err_lwl:'Indique la eslora de flotación.',
   err_disp:'Indique el desplazamiento máximo.', err_proplines:'Seleccione el número de líneas de propulsión.',
   err_prop:'Seleccione el tipo de sistema de propulsión.',
   err_s4_par:'Para híbrido en paralelo, indique fabricante, modelo y potencia del diesel, ratio de reductora, y velocidades crucero/máxima en modo eléctrico.',
@@ -636,8 +637,9 @@ en:{
   l_proj:'Project Name', l_vessel:'Vessel Name', l_country:'Installation Country', l_cat:'Client Category',
   cat_arm:'Shipowner', cat_arm_d:' — Vessel owner / operator',
   cat_ast:'Shipyard', cat_ast_d:' — Builder or repairer',
+  cat_dis:'Designer', cat_dis_d:' — Naval engineering / design company',
   cat_int:'Integrator', cat_int_d:' — System integration company',
-  cat_usr:'End User', cat_usr_d:' — Direct vessel operator',
+  cat_ot:'Other', cat_ot_d:' — Other client type',
   l_class:'Does the project require classification society approval?',
   class_y:'Yes, classification required', class_n:'Not applicable',
   l_class_name:'Classification Society', l_class_type:'Approval Type',
@@ -646,14 +648,14 @@ en:{
   l_retrofit:'Is this a retrofit on an existing vessel?',
   ret_y:'Yes, retrofit on existing vessel', ret_n:'No, new build',
   l_prop_orig:'Original vessel propulsion',
-  po_motor:'Thermal engine', po_sail:'Sail', po_mixed:'Mixed (engine + sail)',
-  l_hull:'Hull type', h_mono:'Monohull', h_cat:'Catamaran', h_tri:'Trimaran', h_plan:'Planing', h_semi:'Semi-planing',
+  po_motor:'Diesel engine', po_sail:'Sail', po_mixed:'Mixed (engine + sail)',
+  l_hull:'Hull type', h_mono:'Monohull', h_cat:'Catamaran', h_tri:'Trimaran',
   l_app:'Application', a_com:'Commercial', a_plea:'Leisure / Pleasure', a_fish:'Fishing', a_pat:'Patrol', a_ferry:'Ferry', a_other:'Other',
   l_model:'Vessel Model / Class (optional)',
-  l_lwl:'Waterline length', h_lwl:'In metres',
+  l_lwl:'Flotation waterline', h_lwl:'In metres',
   l_disp:'Maximum displacement', h_disp:'In metric tonnes',
   l_prop_lines:'Number of propulsion lines', pl_1:'1 line', pl_2:'2 lines',
-  pt_par:'Parallel Hybrid', pt_par_d:' — Electric motor + thermal engine on the same shaft',
+  pt_par:'Parallel Hybrid', pt_par_d:' — Electric motor + diesel engine on the same shaft',
   pt_ser:'Series Hybrid', pt_ser_d:' — Diesel generator + independent electric motor',
   pt_ele:'Full Electric', pt_ele_d:' — Battery-only electric propulsion',
   par_notice:'⚡ Parallel hybrid system — our technical team will review this project with priority.',
@@ -821,8 +823,8 @@ function collect(){
 function buildReview(){
   const d=collect();
   const pm={parallel:t('pt_par'),series:t('pt_ser'),electric:t('pt_ele')};
-  const cm={armador:t('cat_arm'),astillero:t('cat_ast'),integrador:t('cat_int'),usuario_final:t('cat_usr')};
-  const hm={mono:t('h_mono'),catamaran:t('h_cat'),trimaran:t('h_tri'),planing:t('h_plan'),semi:t('h_semi')};
+  const cm={armador:t('cat_arm'),astillero:t('cat_ast'),disenador:t('cat_dis'),integrador:t('cat_int'),otro:t('cat_ot')};
+  const hm={mono:t('h_mono'),catamaran:t('h_cat'),trimaran:t('h_tri')};
   const yn=v=>v==='yes'?t('yn_y'):t('yn_n');
   const plm={'1':'1 '+t('pl_1').replace(/^\d+\s*/,''),'2':'2 '+t('pl_2').replace(/^\d+\s*/,'')};
   const gom={straight:t('go_str'),angle:t('go_ang'),vdrive:t('go_vdr')};
@@ -1011,6 +1013,8 @@ module.exports = async (req, res) => {
       }
 
       // ── STEP A: Write to Odoo — NO inner try/catch ────────────────────────
+      // Helper: '' is invalid for Odoo Selection fields; use false for all optional fields
+      const sel = v => v || false;
       const writeVals = {
         x_portal_submitted: true,
         x_state: 'completed',
@@ -1020,11 +1024,11 @@ module.exports = async (req, res) => {
         x_client_category: String(body.x_client_category || ''),
         x_has_classification: bool(body.x_has_classification),
         x_class_society_name: String(body.x_class_society_name || ''),
-        x_class_society_type: body.x_class_society_type || false,
+        x_class_society_type: sel(body.x_class_society_type),
         x_vessel_retrofit: bool(body.x_vessel_retrofit),
-        x_prop_original: String(body.x_prop_original || ''),
-        x_hull_type: body.x_hull_type || false,
-        x_application: body.x_application || false,
+        x_prop_original: sel(body.x_prop_original),
+        x_hull_type: sel(body.x_hull_type),
+        x_application: sel(body.x_application),
         x_vessel_model: String(body.x_vessel_model || ''),
         x_prop_lines: String(body.x_prop_lines || ''),
         x_propulsion_type: String(body.x_propulsion_type || ''),
@@ -1033,8 +1037,8 @@ module.exports = async (req, res) => {
         x_gearbox_manufacturer: String(body.x_gearbox_manufacturer || ''),
         x_gearbox_model: String(body.x_gearbox_model || ''),
         x_gearbox_ratio: String(body.x_gearbox_ratio || ''),
-        x_gearbox_output: String(body.x_gearbox_output || ''),
-        x_gearbox_type: body.x_gearbox_type || false,
+        x_gearbox_output: sel(body.x_gearbox_output),
+        x_gearbox_type: sel(body.x_gearbox_type),
         x_charge_generator: bool(body.x_charge_generator),
         x_charge_port: bool(body.x_charge_port),
         x_charge_solar: bool(body.x_charge_solar),
@@ -1074,7 +1078,7 @@ module.exports = async (req, res) => {
       const propMap = { parallel: 'Híbrido en Paralelo', series: 'Híbrido en Serie', electric: 'Eléctrico Puro' };
       const catMap = { armador: 'Armador', astillero: 'Astillero', integrador: 'Integrador', usuario_final: 'Usuario Final' };
       const appMap = { commercial: 'Comercial', pleasure: 'Recreo', fishing: 'Pesca', patrol: 'Patrullero', ferry: 'Ferry', other: 'Otro' };
-      const hullMap = { mono: 'Monocasco', catamaran: 'Catamarán', trimaran: 'Trimarán', planing: 'Planeo', semi: 'Semi-planeo' };
+      const hullMap = { mono: 'Monocasco', catamaran: 'Catamarán', trimaran: 'Trimarán' };
       const yn = v => bool(v) ? 'Sí' : 'No';
 
       const emailFields = [
@@ -1088,7 +1092,7 @@ module.exports = async (req, res) => {
         ['Casco', hullMap[body.x_hull_type] || body.x_hull_type || '—'],
         ['Aplicación', appMap[body.x_application] || body.x_application || '—'],
         ['Modelo', body.x_vessel_model || '—'],
-        ['Eslora en flotación (m)', body.x_waterline_length],
+        ['Eslora de flotación (m)', body.x_waterline_length],
         ['Desplazamiento máx. (t)', body.x_max_displacement],
         ['Sistema propulsión', propMap[body.x_propulsion_type] || body.x_propulsion_type],
       ];

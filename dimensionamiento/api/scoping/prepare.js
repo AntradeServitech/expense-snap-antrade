@@ -36,6 +36,7 @@ module.exports = async (req, res) => {
   } catch (_) { ok = false; }
   if (!ok) return res.status(401).json({ error: 'Unauthorized' });
 
+  let leadId = null;
   try {
     // Odoo webhook payload: {id: lead_id, name: ..., partner_id: [id, name]}
     let body = req.body;
@@ -44,12 +45,12 @@ module.exports = async (req, res) => {
     }
     body = body || {};
 
-    const leadId = body.id ? Number(body.id) : null;
+    leadId = body.id ? Number(body.id) : null;
     if (!leadId) return res.status(400).json({ error: 'Missing lead id' });
 
-    // Lee el lead
+    // Lee el lead (incluye x_scoping_wizard_emails para respetar el override del wizard)
     const leads = await searchRead('crm.lead', [['id', '=', leadId]], [
-      'id', 'name', 'x_serial_antrade', 'partner_id',
+      'id', 'name', 'x_serial_antrade', 'partner_id', 'x_scoping_wizard_emails',
     ]);
     if (!leads.length) return res.status(404).json({ error: 'Lead not found' });
     const lead = leads[0];
@@ -89,35 +90,43 @@ module.exports = async (req, res) => {
       primaryEmail = partnerEmail;
     }
 
-    // Recoge emails adicionales de los contactos de roles del proyecto
-    let extraEmails = [];
-    try {
-      const roles = await searchRead(
-        'x_antrade_project_role',
-        [['x_lead_id', '=', leadId]],
-        ['x_contact_ids'],
-      );
-      const contactIds = [
-        ...new Set(roles.flatMap(r => Array.isArray(r.x_contact_ids) ? r.x_contact_ids : [])),
-      ];
-      if (contactIds.length) {
-        const contacts = await searchRead('res.partner', [['id', 'in', contactIds]], ['email']);
-        extraEmails = contacts
-          .filter(c => c.email)
-          .map(c => c.email.trim().toLowerCase());
+    // Destinatarios: override del wizard si está poblado, fallback a partner+roles
+    let recipients;
+    const wizardEmailsRaw = (lead.x_scoping_wizard_emails || '').trim();
+    if (wizardEmailsRaw) {
+      recipients = [...new Set(
+        wizardEmailsRaw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean),
+      )];
+      console.log(`prepare.js: usando destinatarios del wizard lead=${leadId}: [${recipients.join(', ')}]`);
+    } else {
+      // Fallback: partner principal + contactos de roles del proyecto
+      let extraEmails = [];
+      try {
+        const roles = await searchRead(
+          'x_antrade_project_role',
+          [['x_lead_id', '=', leadId]],
+          ['x_contact_ids'],
+        );
+        const contactIds = [
+          ...new Set(roles.flatMap(r => Array.isArray(r.x_contact_ids) ? r.x_contact_ids : [])),
+        ];
+        if (contactIds.length) {
+          const contacts = await searchRead('res.partner', [['id', 'in', contactIds]], ['email']);
+          extraEmails = contacts
+            .filter(c => c.email)
+            .map(c => c.email.trim().toLowerCase());
+        }
+      } catch (e) {
+        console.error('prepare.js: error fetching role contacts:', e.message);
       }
-    } catch (e) {
-      console.error('prepare.js: error fetching role contacts:', e.message);
+      const primaryNorm = (primaryEmail || '').trim().toLowerCase();
+      recipients = [
+        ...new Set([
+          ...(primaryNorm ? [primaryNorm] : []),
+          ...extraEmails.filter(e => e && e !== primaryNorm),
+        ]),
+      ].filter(Boolean);
     }
-
-    // Lista de destinatarios únicos (primario primero)
-    const primaryNorm = (primaryEmail || '').trim().toLowerCase();
-    const recipients = [
-      ...new Set([
-        ...(primaryNorm ? [primaryNorm] : []),
-        ...extraEmails.filter(e => e && e !== primaryNorm),
-      ]),
-    ].filter(Boolean);
 
     // Genera token HMAC
     const { token, exp } = generateToken(sheetId, secret);
@@ -188,6 +197,29 @@ module.exports = async (req, res) => {
       }
     }
 
+    // Escribe el resultado REAL del envío en crm.lead (sobreescribe el valor optimista de id=1214)
+    const tsNow = new Date();
+    const nowStr = [
+      String(tsNow.getDate()).padStart(2, '0'),
+      String(tsNow.getMonth() + 1).padStart(2, '0'),
+      tsNow.getFullYear(),
+    ].join('/') + ' ' + [
+      String(tsNow.getHours()).padStart(2, '0'),
+      String(tsNow.getMinutes()).padStart(2, '0'),
+    ].join(':');
+    const statusFinal = sentList.length > 0
+      ? `Enviado ${nowStr} a: ${sentList.join(', ')}`
+      : `Error ${nowStr}: Ningun email pudo enviarse`;
+    try {
+      await execute('crm.lead', 'write', [[leadId], {
+        x_last_scoping_status: statusFinal,
+        x_scoping_wizard_emails: false,
+      }]);
+      console.log(`prepare.js: status lead=${leadId}: "${statusFinal}"`);
+    } catch (writeErr) {
+      console.error('prepare.js: error escribiendo status en lead:', writeErr.message);
+    }
+
     return res.status(200).json({
       ok: true,
       portal_url: portalUrl,
@@ -202,6 +234,22 @@ module.exports = async (req, res) => {
 
   } catch (err) {
     console.error('prepare.js error:', err);
+    if (leadId) {
+      try {
+        const tsErr = new Date();
+        const errStr = [
+          String(tsErr.getDate()).padStart(2, '0'),
+          String(tsErr.getMonth() + 1).padStart(2, '0'),
+          tsErr.getFullYear(),
+        ].join('/') + ' ' + [
+          String(tsErr.getHours()).padStart(2, '0'),
+          String(tsErr.getMinutes()).padStart(2, '0'),
+        ].join(':');
+        await execute('crm.lead', 'write', [[leadId], {
+          x_last_scoping_status: `Error ${errStr}: ${(err.message || 'Error interno').slice(0, 120)}`,
+        }]);
+      } catch (_) {}
+    }
     return res.status(500).json({ error: err.message || 'Internal error' });
   }
 };
