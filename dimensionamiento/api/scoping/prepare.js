@@ -195,11 +195,11 @@ module.exports = async (req, res) => {
         if (leadId) {
           try {
             const ts = new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-            await execute('crm.lead', 'message_post', [[leadId], {
+            await execute('crm.lead', 'message_post', [[leadId]], {
               body: `<p>Invitacion de dimensionamiento enviada a ${email} (${ts}).<br/>Proyecto: ${escHtml(projectName)}</p>`,
               message_type: 'comment',
               subtype_xmlid: 'mail.mt_note',
-            }]);
+            });
           } catch (chatErr) {
             console.error(`prepare.js: error en message_post para ${email}:`, chatErr.message);
           }

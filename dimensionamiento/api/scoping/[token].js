@@ -1282,8 +1282,8 @@ ${buildEmailTable(emailFields)}
           const ts = new Date().toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
           const msgBody = `<p>Formulario de dimensionamiento completado por el cliente (${ts}).<br/>Proyecto: ${body.x_project_name || 'Sin nombre'}</p>`;
           const msgVals = { body: msgBody, message_type: 'comment', subtype_xmlid: 'mail.mt_note' };
-          if (leadAttachmentId) msgVals.attachment_ids = [[4, leadAttachmentId]];
-          await execute('crm.lead', 'message_post', [[leadId], msgVals]);
+          if (leadAttachmentId) msgVals.attachment_ids = [leadAttachmentId];
+          await execute('crm.lead', 'message_post', [[leadId]], msgVals);
         } catch (chatErr) {
           console.error('[token].js: error en message_post del lead:', chatErr.message);
         }
