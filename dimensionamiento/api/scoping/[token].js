@@ -1199,12 +1199,15 @@ module.exports = async (req, res) => {
         const pdfData = Object.assign({ id: sheetId }, writeVals, numFields);
         const clientIp = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';
         const pdfBytes = await buildPdf(pdfData, body.x_declarant, clientIp, clientLogoBase64);
+        console.log(`[token].js: buildPdf returned ${pdfBytes ? pdfBytes.length : 'null/undefined'} bytes (type=${pdfBytes ? pdfBytes.constructor.name : 'N/A'})`);
+        const b64check = Buffer.from(pdfBytes || []).toString('base64');
+        console.log(`[token].js: base64 length=${b64check.length}, first20chars=${b64check.slice(0,20)}`);
         const safeName = (body.x_project_name || 'Proyecto').replace(/[^a-zA-Z0-9_\-]/g, '_');
         const pdfName = `Dimensionamiento_${safeName}.pdf`;
         const rawId = await execute('ir.attachment', 'create', [{
           name: pdfName,
           type: 'binary',
-          raw: Buffer.from(pdfBytes).toString('base64'),
+          raw: b64check,
           res_model: SHEET_MODEL,
           res_id: sheetId,
           mimetype: 'application/pdf',
