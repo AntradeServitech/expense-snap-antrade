@@ -54,6 +54,11 @@ function buildEmailTable(fields) {
 
 // ── PDF builder ───────────────────────────────────────────────────────────────
 
+function toPdf(v) {
+  if (v === null || v === undefined || v === false) return '';
+  return String(v).replace(/[^ -\xFF]/g, '?').trim();
+}
+
 async function buildPdf(data, declarant, ip, clientLogoBase64) {
   const pdfDoc = await PDFDocument.create();
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -97,7 +102,7 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
       height: clientDims.height,
     });
   }
-  page.drawText(`Declarado por: ${declarant || '—'}   |   IP: ${ip}   |   ${new Date().toLocaleString('es-ES')}`,
+  page.drawText(`Declarado por: ${toPdf(declarant) || '-'}   |   IP: ${toPdf(ip)}   |   ${new Date().toLocaleString('es-ES')}`,
     { x: 40, y: 775, size: 8, font, color: rgb(0.9, 0.9, 0.9) });
   page.drawLine({ start: { x: 40, y: 762 }, end: { x: 555, y: 762 }, thickness: 0.5, color: rgb(0.8, 0.8, 0.8) });
 
@@ -180,8 +185,8 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
       currentPage = addPage();
       y = 748;
     }
-    currentPage.drawText(String(label) + ':', { x: 40, y, size: 9, font: bold, color: navy });
-    currentPage.drawText(String(value ?? '—'), { x: 220, y, size: 9, font, color: rgb(0.1, 0.1, 0.1) });
+    currentPage.drawText(toPdf(label) + ':', { x: 40, y, size: 9, font: bold, color: navy });
+    currentPage.drawText(toPdf(value) || '-', { x: 220, y, size: 9, font, color: rgb(0.1, 0.1, 0.1) });
     y -= lineH;
   }
 
@@ -1198,7 +1203,8 @@ module.exports = async (req, res) => {
         const pdfName = `Dimensionamiento_${safeName}.pdf`;
         const rawId = await execute('ir.attachment', 'create', [{
           name: pdfName,
-          datas: Buffer.from(pdfBytes).toString('base64'),
+          type: 'binary',
+          raw: Buffer.from(pdfBytes).toString('base64'),
           res_model: SHEET_MODEL,
           res_id: sheetId,
           mimetype: 'application/pdf',
