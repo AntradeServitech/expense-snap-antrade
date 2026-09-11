@@ -66,8 +66,12 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
   const navy = rgb(0.051, 0.106, 0.165);
   const gold = rgb(0.788, 0.659, 0.298);
 
-  const antradeImg = await pdfDoc.embedPng(LOGO_BYTES);
-  const antradeDims = antradeImg.scaleToFit(130, 54);
+  let antradeImg = null;
+  let antradeDims = null;
+  try {
+    antradeImg = await pdfDoc.embedPng(LOGO_BYTES);
+    antradeDims = antradeImg.scaleToFit(130, 54);
+  } catch (_) {}
 
   let clientImg = null;
   let clientDims = null;
@@ -82,12 +86,14 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
   const addPage = () => {
     const p = pdfDoc.addPage([595, 842]);
     p.drawRectangle({ x: 0, y: 772, width: 595, height: 70, color: navy });
-    p.drawImage(antradeImg, {
-      x: 595 - 8 - antradeDims.width,
-      y: 772 + (70 - antradeDims.height) / 2,
-      width: antradeDims.width,
-      height: antradeDims.height,
-    });
+    if (antradeImg && antradeDims) {
+      p.drawImage(antradeImg, {
+        x: 595 - 8 - antradeDims.width,
+        y: 772 + (70 - antradeDims.height) / 2,
+        width: antradeDims.width,
+        height: antradeDims.height,
+      });
+    }
     p.drawText('ANTRADE SERVITECH SL', { x: 40, y: 812, size: 13, font: bold, color: rgb(1, 1, 1) });
     p.drawText('Dimensionamiento Inicial de Proyecto', { x: 40, y: 794, size: 9, font, color: gold });
     return p;
@@ -1202,6 +1208,9 @@ module.exports = async (req, res) => {
         console.log(`[token].js: buildPdf returned ${pdfBytes ? pdfBytes.length : 'null/undefined'} bytes (type=${pdfBytes ? pdfBytes.constructor.name : 'N/A'})`);
         const b64check = Buffer.from(pdfBytes || []).toString('base64');
         console.log(`[token].js: base64 length=${b64check.length}, first20chars=${b64check.slice(0,20)}`);
+        if (!b64check || b64check.length < 200) {
+          throw new Error(`buildPdf generó PDF vacío o inválido (${b64check.length} chars base64)`);
+        }
         const safeName = (body.x_project_name || 'Proyecto').replace(/[^a-zA-Z0-9_\-]/g, '_');
         const pdfName = `Dimensionamiento_${safeName}.pdf`;
         const rawId = await execute('ir.attachment', 'create', [{
