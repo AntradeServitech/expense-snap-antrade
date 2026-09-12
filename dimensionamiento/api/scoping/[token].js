@@ -1216,7 +1216,7 @@ module.exports = async (req, res) => {
         const rawId = await execute('ir.attachment', 'create', [{
           name: pdfName,
           type: 'binary',
-          raw: Buffer.from(pdfBytes),
+          datas: b64check,
           res_model: SHEET_MODEL,
           res_id: sheetId,
           mimetype: 'application/pdf',
