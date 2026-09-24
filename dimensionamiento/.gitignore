@@ -1,0 +1,4 @@
+.vercel
+.env.prod
+.env.local
+.env*.local

@@ -1,0 +1,14 @@
+{
+  "name": "antrade-dimensionamiento",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portal de dimensionamiento inicial de proyecto — Antrade Servitech SL",
+  "scripts": {
+    "dev": "echo 'Start portal locally with: npx vercel (flag dev)'"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "pdf-lib": "^1.17.1",
+    "xmlrpc": "^1.3.2"
+  }
+}
