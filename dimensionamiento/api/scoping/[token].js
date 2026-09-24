@@ -124,7 +124,11 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
     ['País de instalación', data.x_installation_country],
     ['Categoría del cliente', catMap[data.x_client_category] || data.x_client_category],
     ['Sociedad de clasificación', bool(data.x_has_classification) ? (data.x_class_society_name || '—') : 'No aplica'],
-    ['Tipo de aprobación', bool(data.x_has_classification) ? (data.x_class_society_type === 'mandatory' ? 'Obligatoria' : 'Consulta') : '—'],
+    ['Nivel de certificación', bool(data.x_has_classification) ? (
+      data.x_class_society_type === 'type_approval' ? 'Type Approval' :
+      data.x_class_society_type === 'full_class' ? 'Full Class' :
+      data.x_class_society_type === 'otros' ? ('Otros' + (data.x_class_cert_otros ? ': ' + data.x_class_cert_otros : '')) :
+      data.x_class_society_type || '—') : '—'],
     ['Retrofit', yn(data.x_vessel_retrofit)],
     ['Propulsión original', data.x_prop_original || '—'],
     ['Tipo de casco', hullMap[data.x_hull_type] || data.x_hull_type || '—'],
@@ -150,6 +154,8 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
       ['V. máxima diesel (kn)', data.x_par_diesel_max_kn],
       ['V. crucero eléctrico (kn)', data.x_par_elec_cruise_kn],
       ['V. máxima eléctrico (kn)', data.x_par_elec_max_kn],
+      ['Sentido rotación hélice', data.x_prop_rotation === 'cw' ? 'Horaria (derecha)' : data.x_prop_rotation === 'ccw' ? 'Antihoraria (izquierda)' : '—'],
+      ['Voltaje batería diesel (V)', data.x_diesel_battery_voltage],
     );
   } else if (data.x_propulsion_type === 'series') {
     fields.push(
@@ -177,7 +183,6 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
   fields.push(
     ['Generador a bordo', yn(data.x_charge_generator)],
     ['Potencia generador (kW)', bool(data.x_charge_generator) ? (data.x_charge_gen_power || '—') : '—'],
-    ['Carga en puerto', yn(data.x_charge_port)],
     ['Panel solar', yn(data.x_charge_solar)],
     ['Declarado por', declarant || '—'],
   );
@@ -194,6 +199,31 @@ async function buildPdf(data, declarant, ip, clientLogoBase64) {
     currentPage.drawText(toPdf(label) + ':', { x: 40, y, size: 9, font: bold, color: navy });
     currentPage.drawText(toPdf(value) || '-', { x: 220, y, size: 9, font, color: rgb(0.1, 0.1, 0.1) });
     y -= lineH;
+  }
+
+  const notes = data.x_client_notes ? toPdf(String(data.x_client_notes)).trim() : '';
+  if (notes) {
+    y -= 8;
+    if (y < 80) { currentPage = addPage(); y = 748; }
+    currentPage.drawLine({ start: { x: 40, y: y + 6 }, end: { x: 555, y: y + 6 }, thickness: 0.4, color: rgb(0.8, 0.8, 0.8) });
+    y -= 4;
+    currentPage.drawText('Notas / Notes:', { x: 40, y, size: 9, font: bold, color: navy });
+    y -= lineH;
+    const words = notes.replace(/\r?\n/g, ' | ').split(' ');
+    let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (test.length > 82) {
+        if (y < 60) { currentPage = addPage(); y = 748; }
+        currentPage.drawText(line, { x: 55, y, size: 9, font, color: rgb(0.1, 0.1, 0.1) });
+        y -= lineH;
+        line = w;
+      } else { line = test; }
+    }
+    if (line) {
+      if (y < 60) { currentPage = addPage(); y = 748; }
+      currentPage.drawText(line, { x: 55, y, size: 9, font, color: rgb(0.1, 0.1, 0.1) });
+    }
   }
 
   return pdfDoc.save();
@@ -327,12 +357,17 @@ input.bad,select.bad{border-color:var(--err)}
       <div class="row" style="margin-top:11px">
         <div class="f"><label data-t="l_class_name"></label><input type="text" name="x_class_society_name" placeholder="DNV, Bureau Veritas…"/></div>
         <div class="f">
-          <label data-t="l_class_type"></label>
-          <select name="x_class_society_type">
+          <label data-t="l_cert_level"></label>
+          <select name="x_class_society_type" onchange="toggle('c-cert-otros',this.value==='otros')">
             <option value="" data-t="sel"></option>
-            <option value="mandatory" data-t="class_mand"></option>
-            <option value="advisory" data-t="class_adv"></option>
+            <option value="type_approval" data-t="cert_ta"></option>
+            <option value="full_class" data-t="cert_fc"></option>
+            <option value="otros" data-t="cert_ot"></option>
           </select>
+          <div class="cond" id="c-cert-otros" style="margin-top:8px">
+            <label data-t="l_cert_otros"></label>
+            <input type="text" name="x_class_cert_otros" placeholder=""/>
+          </div>
         </div>
       </div>
     </div>
@@ -491,6 +526,17 @@ input.bad,select.bad{border-color:var(--err)}
         <div class="f"><label data-t="l_par_e_max"></label><input type="number" name="x_par_elec_max_kn" min="0" step="0.1" placeholder="kn"/></div>
       </div>
     </div>
+    <div class="card">
+      <div class="sec-lbl" data-t="sec_par_tf7430"></div>
+      <div class="f">
+        <label data-t="l_prop_rotation"></label>
+        <div class="rg">
+          <label class="ri"><input type="radio" name="x_prop_rotation" value="cw"/><span class="rl" data-t="rot_cw"></span></label>
+          <label class="ri"><input type="radio" name="x_prop_rotation" value="ccw"/><span class="rl" data-t="rot_ccw"></span></label>
+        </div>
+      </div>
+      <div class="f" style="max-width:280px"><label data-t="l_diesel_batt_v"></label><input type="number" name="x_diesel_battery_voltage" min="0" step="1" placeholder="V"/></div>
+    </div>
   </div>
 
   <div class="cond" id="c-ser">
@@ -542,13 +588,6 @@ input.bad,select.bad{border-color:var(--err)}
   </div>
   <div class="card">
     <div class="f">
-      <label data-t="l_shore"></label>
-      <div class="rg">
-        <label class="ri"><input type="radio" name="x_charge_port" value="yes"/><span class="rl" data-t="shore_d"></span></label>
-        <label class="ri"><input type="radio" name="x_charge_port" value="no"/><span class="rl" data-t="yn_n"></span></label>
-      </div>
-    </div>
-    <div class="f" style="margin-top:11px">
       <label data-t="l_solar"></label>
       <div class="rg">
         <label class="ri"><input type="radio" name="x_charge_solar" value="yes"/><span class="rl" data-t="solar_d"></span></label>
@@ -569,6 +608,12 @@ input.bad,select.bad{border-color:var(--err)}
       <label><span data-t="l_decl"></span><span class="req">*</span></label>
       <input type="text" id="f-decl" name="x_declarant"/>
       <p class="hint" data-t="h_decl"></p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="f">
+      <label data-t="l_notes"></label>
+      <textarea name="x_client_notes" rows="4" style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:6px;font-family:'DM Sans',sans-serif;font-size:.88rem;color:var(--text);background:var(--off);outline:none;resize:vertical;transition:.18s" onfocus="this.style.borderColor='var(--gold)';this.style.background='var(--wh)'" onblur="this.style.borderColor='var(--border)';this.style.background='var(--off)'"></textarea>
     </div>
   </div>
   <div class="card">
@@ -616,8 +661,9 @@ es:{
   cat_ot:'Otro', cat_ot_d:' — Otro tipo de cliente',
   l_class:'¿Requiere aprobación de sociedad de clasificación?',
   class_y:'Sí, requiere clasificación', class_n:'No aplica',
-  l_class_name:'Sociedad de Clasificación', l_class_type:'Tipo de Aprobación',
-  class_mand:'Obligatoria (Type Approval)', class_adv:'Consulta / Asesoramiento',
+  l_class_name:'Sociedad de Clasificación', l_cert_level:'Nivel de certificación',
+  cert_ta:'Type Approval', cert_fc:'Full Class', cert_ot:'Otros',
+  l_cert_otros:'Especifica el tipo (opcional)',
   sel:'— Seleccionar —',
   l_retrofit:'¿Instalación en buque existente (retrofit)?',
   ret_y:'Sí, retrofit en buque existente', ret_n:'No, buque de nueva construcción',
@@ -643,15 +689,18 @@ es:{
   sec_par_speeds:'Velocidades en modo paralelo',
   l_par_d_cruise:'V. crucero diesel (kn)', l_par_d_max:'V. máxima diesel (kn)',
   l_par_e_cruise:'V. crucero eléctrico (kn)', l_par_e_max:'V. máxima eléctrico (kn)',
+  sec_par_tf7430:'Datos para Transfluid (TF7430)',
+  l_prop_rotation:'Sentido de rotación de la hélice', rot_cw:'Horaria (derecha)', rot_ccw:'Antihoraria (izquierda)',
+  l_diesel_batt_v:'Voltaje batería diesel (V)',
   sec_gen:'Generador serie', l_gen_kw:'Potencia generador serie (kW)',
   sec_speeds:'Velocidades',
   l_cruise_kn:'Velocidad de crucero (kn)', l_max_kn:'Velocidad máxima (kn)',
   l_autonomy_h:'Autonomía estimada (horas)',
   l_chg_gen:'¿El buque dispondrá de generador auxiliar para carga?',
   l_chg_genpow:'Potencia del generador auxiliar (kW)',
-  l_shore:'Carga en puerto (shore power)', shore_d:'Sí — conectado a la red eléctrica del puerto',
   l_solar:'Panel solar fotovoltaico', solar_d:'Sí — instalación de paneles solares para carga auxiliar',
   yn_y:'Sí', yn_n:'No',
+  l_notes:'Notas o comentarios adicionales (opcional)',
   l_decl:'Nombre y cargo de quien completa el formulario', h_decl:'Quedará registrado en el documento generado',
   rev_lbl:'Resumen de datos introducidos', col_f:'Campo', col_v:'Valor',
   sbm_note:'Al enviar, generaremos el resumen técnico y notificaremos a nuestro equipo. Recibirá una confirmación por correo.',
@@ -681,8 +730,9 @@ en:{
   cat_ot:'Other', cat_ot_d:' — Other client type',
   l_class:'Does the project require classification society approval?',
   class_y:'Yes, classification required', class_n:'Not applicable',
-  l_class_name:'Classification Society', l_class_type:'Approval Type',
-  class_mand:'Mandatory (Type Approval)', class_adv:'Advisory / Consulting',
+  l_class_name:'Classification Society', l_cert_level:'Certification Level',
+  cert_ta:'Type Approval', cert_fc:'Full Class', cert_ot:'Other',
+  l_cert_otros:'Specify type (optional)',
   sel:'— Select —',
   l_retrofit:'Is this a retrofit on an existing vessel?',
   ret_y:'Yes, retrofit on existing vessel', ret_n:'No, new build',
@@ -708,15 +758,18 @@ en:{
   sec_par_speeds:'Parallel mode speeds',
   l_par_d_cruise:'Diesel cruise speed (kn)', l_par_d_max:'Diesel max speed (kn)',
   l_par_e_cruise:'Electric cruise speed (kn)', l_par_e_max:'Electric max speed (kn)',
+  sec_par_tf7430:'Data for Transfluid (TF7430)',
+  l_prop_rotation:'Propeller rotation direction', rot_cw:'Clockwise (right)', rot_ccw:'Counter-clockwise (left)',
+  l_diesel_batt_v:'Diesel battery voltage (V)',
   sec_gen:'Series generator', l_gen_kw:'Series generator power (kW)',
   sec_speeds:'Speeds',
   l_cruise_kn:'Cruise speed (kn)', l_max_kn:'Maximum speed (kn)',
   l_autonomy_h:'Estimated autonomy (hours)',
   l_chg_gen:'Will the vessel have an auxiliary generator for charging?',
   l_chg_genpow:'Auxiliary generator power (kW)',
-  l_shore:'Shore power charging', shore_d:'Yes — connected to marina power grid',
   l_solar:'Solar PV panels', solar_d:'Yes — solar panels for auxiliary charging',
   yn_y:'Yes', yn_n:'No',
+  l_notes:'Additional notes or comments (optional)',
   l_decl:'Name and position of person completing the form', h_decl:'This will be recorded in the generated document',
   rev_lbl:'Summary of entered data', col_f:'Field', col_v:'Value',
   sbm_note:'On submission, we will generate a technical summary and notify our team. You will receive a confirmation by email.',
@@ -851,7 +904,7 @@ function goBack(){ if(cur>1) showStep(cur-1); }
 
 function collect(){
   const d={};
-  document.querySelectorAll('input[name],select[name]').forEach(el=>{
+  document.querySelectorAll('input[name],select[name],textarea[name]').forEach(el=>{
     if(!el.name) return;
     if(el.type==='radio'){ if(el.checked) d[el.name]=el.value; }
     else if(el.value!==undefined&&el.value!=='') d[el.name]=el.value;
@@ -1064,6 +1117,7 @@ module.exports = async (req, res) => {
         x_has_classification: bool(body.x_has_classification),
         x_class_society_name: String(body.x_class_society_name || ''),
         x_class_society_type: sel(body.x_class_society_type),
+        x_class_cert_otros: String(body.x_class_cert_otros || ''),
         x_vessel_retrofit: bool(body.x_vessel_retrofit),
         x_prop_original: sel(body.x_prop_original),
         x_hull_type: sel(body.x_hull_type),
@@ -1078,10 +1132,11 @@ module.exports = async (req, res) => {
         x_gearbox_ratio: String(body.x_gearbox_ratio || ''),
         x_gearbox_output: sel(body.x_gearbox_output),
         x_gearbox_type: sel(body.x_gearbox_type),
+        x_prop_rotation: sel(body.x_prop_rotation),
         x_charge_generator: bool(body.x_charge_generator),
-        x_charge_port: bool(body.x_charge_port),
         x_charge_solar: bool(body.x_charge_solar),
         x_declarant: String(body.x_declarant || ''),
+        x_client_notes: String(body.x_client_notes || ''),
       };
 
       // Numeric fields — only set if provided
@@ -1094,6 +1149,7 @@ module.exports = async (req, res) => {
         x_par_diesel_max_kn: num(body.x_par_diesel_max_kn),
         x_par_elec_cruise_kn: num(body.x_par_elec_cruise_kn),
         x_par_elec_max_kn: num(body.x_par_elec_max_kn),
+        x_diesel_battery_voltage: num(body.x_diesel_battery_voltage),
         x_ser_generator_kw: num(body.x_ser_generator_kw),
         x_cruise_speed_kn: num(body.x_cruise_speed_kn),
         x_max_speed_kn: num(body.x_max_speed_kn),
@@ -1104,12 +1160,15 @@ module.exports = async (req, res) => {
 
       await execute(SHEET_MODEL, 'write', [[sheetId], writeVals]);
 
-      // Set x_ficha_completada on lead
+      // Set x_ficha_completada and x_propulsion_type on lead
       if (leadId) {
         try {
-          await execute('crm.lead', 'write', [[leadId], { x_ficha_completada: true }]);
+          await execute('crm.lead', 'write', [[leadId], {
+            x_ficha_completada: true,
+            x_propulsion_type: body.x_propulsion_type || false,
+          }]);
         } catch (e) {
-          console.error('[token].js: x_ficha_completada write failed:', e.message);
+          console.error('[token].js: crm.lead write failed:', e.message);
         }
       }
 
@@ -1125,7 +1184,13 @@ module.exports = async (req, res) => {
         ['Buque', body.x_vessel_name],
         ['País instalación', body.x_installation_country],
         ['Categoría cliente', catMap[body.x_client_category] || body.x_client_category],
-        ['Clasificación', bool(body.x_has_classification) ? ((body.x_class_society_name || '—') + ' — ' + (body.x_class_society_type === 'mandatory' ? 'Obligatoria' : 'Consulta')) : 'No'],
+        ['Clasificación', bool(body.x_has_classification) ? (() => {
+          const cert = body.x_class_society_type === 'type_approval' ? 'Type Approval' :
+            body.x_class_society_type === 'full_class' ? 'Full Class' :
+            body.x_class_society_type === 'otros' ? ('Otros' + (body.x_class_cert_otros ? ': ' + body.x_class_cert_otros : '')) :
+            body.x_class_society_type || '—';
+          return (body.x_class_society_name || '—') + ' — ' + cert;
+        })() : 'No'],
         ['Retrofit', yn(body.x_vessel_retrofit)],
         ['Propulsión original', body.x_prop_original || '—'],
         ['Casco', hullMap[body.x_hull_type] || body.x_hull_type || '—'],
@@ -1151,6 +1216,8 @@ module.exports = async (req, res) => {
           ['V. máxima diesel (kn)', body.x_par_diesel_max_kn],
           ['V. crucero eléctrico (kn)', body.x_par_elec_cruise_kn],
           ['V. máxima eléctrico (kn)', body.x_par_elec_max_kn],
+          ['Sentido rotación hélice', body.x_prop_rotation === 'cw' ? 'Horaria (derecha)' : body.x_prop_rotation === 'ccw' ? 'Antihoraria (izquierda)' : '—'],
+          ['Voltaje batería diesel (V)', body.x_diesel_battery_voltage],
         );
       } else if (body.x_propulsion_type === 'series') {
         emailFields.push(
@@ -1178,10 +1245,12 @@ module.exports = async (req, res) => {
       emailFields.push(
         ['Generador a bordo', yn(body.x_charge_generator)],
         ['Potencia gen. (kW)', bool(body.x_charge_generator) ? (body.x_charge_gen_power || '—') : '—'],
-        ['Carga en puerto', yn(body.x_charge_port)],
         ['Panel solar', yn(body.x_charge_solar)],
         ['Declarado por', body.x_declarant],
       );
+      if (body.x_client_notes && String(body.x_client_notes).trim()) {
+        emailFields.push(['Notas / Notes', String(body.x_client_notes).trim()]);
+      }
 
       // ── Fetch partner logo for PDF header ─────────────────────────────────
       let clientLogoBase64 = null;
