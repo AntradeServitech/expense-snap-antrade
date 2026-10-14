@@ -168,6 +168,16 @@ async function generateTF7430Excel(data) {
       ? String(data.x_diesel_battery_voltage)
       : 'N/A',
     { argb: 'FFE4F4EC' }, 'B', false);
+  addField('Diesel Engine Manufacturer', na(data.x_diesel_manufacturer), { argb: 'FFE4F4EC' }, 'B', false);
+  addField('Diesel Engine Model', na(data.x_diesel_model), { argb: 'FFE4F4EC' }, 'B', false);
+  addField('Diesel Engine Power (kW)',
+    (data.x_diesel_power_kw && data.x_diesel_power_kw > 0)
+      ? String(data.x_diesel_power_kw) : 'N/A',
+    { argb: 'FFE4F4EC' }, 'B', false);
+  addField('Diesel Engine RPM',
+    (data.x_diesel_rpm && data.x_diesel_rpm > 0)
+      ? String(data.x_diesel_rpm) : 'N/A',
+    { argb: 'FFE4F4EC' }, 'B', false);
 
   row++;
 
@@ -176,10 +186,6 @@ async function generateTF7430Excel(data) {
 
   const pendingFields = [
     'IACS/Classification Society (formal name)',
-    'Diesel Engine Manufacturer',
-    'Diesel Engine Model',
-    'Diesel Engine Power (kW)',
-    'Diesel Engine RPM',
     'Engine Torsional System Data',
     'Engine Crankshaft Inertia',
     'Engine Firing Angle / Cylinder Configuration',
@@ -320,6 +326,16 @@ async function generateTF7430Pdf(data) {
     (data.x_diesel_battery_voltage && data.x_diesel_battery_voltage > 0)
       ? String(data.x_diesel_battery_voltage) : 'N/A',
     'B', false);
+  p = drawRow(p, 'Diesel Engine Manufacturer', na(data.x_diesel_manufacturer), 'B', false);
+  p = drawRow(p, 'Diesel Engine Model', na(data.x_diesel_model), 'B', false);
+  p = drawRow(p, 'Diesel Engine Power (kW)',
+    (data.x_diesel_power_kw && data.x_diesel_power_kw > 0)
+      ? String(data.x_diesel_power_kw) : 'N/A',
+    'B', false);
+  p = drawRow(p, 'Diesel Engine RPM',
+    (data.x_diesel_rpm && data.x_diesel_rpm > 0)
+      ? String(data.x_diesel_rpm) : 'N/A',
+    'B', false);
 
   y -= 6;
   p.drawLine({ start: { x: 40, y: y + 4 }, end: { x: 555, y: y + 4 }, thickness: 0.4, color: rgb(0.7, 0.7, 0.7) });
@@ -331,10 +347,6 @@ async function generateTF7430Pdf(data) {
 
   const pendingFields = [
     'IACS/Classification Society (formal name)',
-    'Diesel Engine Manufacturer',
-    'Diesel Engine Model',
-    'Diesel Engine Power (kW)',
-    'Diesel Engine RPM',
     'Engine Torsional System Data',
     'Engine Crankshaft Inertia',
     'Engine Firing Angle / Cylinder Config.',
@@ -367,7 +379,7 @@ async function generateTF7430Pdf(data) {
   p.drawText('Name / Signature / Date', { x: 40, y, size: 7, font: italic, color: rgb(0.5, 0.5, 0.5) });
   p.drawText('Name / Signature / Date', { x: 320, y, size: 7, font: italic, color: rgb(0.5, 0.5, 0.5) });
 
-  return pdfDoc.save();
+  return Buffer.from(await pdfDoc.save());
 }
 
 module.exports = { generateTF7430Excel, generateTF7430Pdf };

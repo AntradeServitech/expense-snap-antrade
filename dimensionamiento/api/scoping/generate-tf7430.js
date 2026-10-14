@@ -11,6 +11,7 @@ const FIELDS = [
   'x_has_classification', 'x_class_society_type', 'x_class_society_name', 'x_class_cert_otros',
   'x_gearbox_manufacturer', 'x_gearbox_model', 'x_gearbox_ratio', 'x_gearbox_output',
   'x_prop_rotation', 'x_diesel_battery_voltage',
+  'x_diesel_manufacturer', 'x_diesel_model', 'x_diesel_power_kw', 'x_diesel_rpm',
 ];
 
 module.exports = async (req, res) => {
