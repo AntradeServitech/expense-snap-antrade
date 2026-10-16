@@ -247,8 +247,7 @@ function renderWizard(sheet, token) {
 :root{--navy:#0d1b2a;--gold:#c9a84c;--gold-lt:#e8d8a0;--off:#f4f6f9;--wh:#ffffff;--text:#1a2332;--muted:#6b7a8d;--border:#dde3ec;--err:#c0392b}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'DM Sans',system-ui,sans-serif;background:var(--off);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
-.hdr{background:var(--navy);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,.3)}
-.logo-img{height:38px;width:auto;display:block}
+.hdr{background:var(--navy);padding:16px 24px;display:flex;align-items:center;justify-content:flex-end;position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(0,0,0,.3)}
 .lang-wrap{display:flex;gap:3px;background:rgba(255,255,255,.08);border-radius:6px;padding:3px}
 .lang-btn{border:none;background:transparent;color:rgba(255,255,255,.6);font-size:.72rem;font-weight:700;padding:4px 11px;border-radius:4px;cursor:pointer;letter-spacing:.06em;transition:.18s}
 .lang-btn.on{background:var(--gold);color:var(--navy)}
@@ -308,7 +307,6 @@ input.bad,select.bad{border-color:var(--err)}
 <body>
 
 <header class="hdr">
-  <img class="logo-img" src="data:image/png;base64,${LOGO_BYTES.toString('base64')}" alt="Antrade Servitech"/>
   <div class="lang-wrap">
     <button class="lang-btn on" id="btn-es" onclick="setLang('es')">ES</button>
     <button class="lang-btn" id="btn-en" onclick="setLang('en')">EN</button>
