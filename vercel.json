@@ -8,6 +8,8 @@
     "api/projects.js":             { "maxDuration": 30 },
     "api/generate-manual.js":      { "maxDuration": 120 },
     "api/generate-ficha.js":       { "maxDuration": 120 },
+    "api/generate-manual-elec.js": { "maxDuration": 120 },
+    "api/generate-manual-meca.js": { "maxDuration": 120 },
     "api/data-sheet/prepare.js":   { "maxDuration": 30 },
     "api/data-sheet/send.js":      { "maxDuration": 30 },
     "api/data-sheet/[token].js":   { "maxDuration": 30 }
